@@ -9,11 +9,12 @@ on GitHub for a portfolio, but it works with any Gitea instance.
 [Install](#install) ·
 [Platform support](#platform-support) ·
 [Credentials](#credentials) ·
-[Usage](#usage) ·
+[Commands](#commands) ·
 [Examples](#examples) ·
 [What gets skipped](#what-gets-skipped-and-why) ·
 [Redacting emails](#redacting-email-addresses) ·
 [Flags](#flags) ·
+[Safety](#safety-properties) ·
 [Limitations](#known-limitations)
 
 ## Why not just do it by hand?
@@ -138,15 +139,18 @@ Your Gitea token needs **both** `read:user` and `write:repository` scopes.
 repositories, even though the token can read and write them individually. Create
 one at `<your-gitea>/user/settings/applications`.
 
-## Usage
+## Commands
 
-```sh
-gitea2github doctor                # verify credentials and scopes first
-gitea2github list                  # see what is visible, and how it is classified
-gitea2github migrate --dry-run     # see exactly what would happen
-gitea2github migrate               # do it
-gitea2github relink ~/Git          # repoint local clones at GitHub
-```
+| Command | Takes | What it does |
+| --- | --- | --- |
+| `doctor` | — | Checks both credentials and their scopes, and says which half is broken |
+| `list` | — | Lists the Gitea repositories it can see, and how each one is classified |
+| `migrate` | — | Mirrors repositories to GitHub. Run it with `--dry-run` first |
+| `relink` | a **directory** | Repoints the local clones under that directory away from Gitea |
+
+Every command takes `--gitea-url` (default `https://platform.zone01.gr/git`), and
+`migrate` and `relink` both take `--dry-run`. The full list is under
+[Flags](#flags); worked examples are in [Examples](#examples).
 
 `doctor` tells you precisely which half of the chain is broken:
 
@@ -158,7 +162,7 @@ Gitea
                fix   create a token with BOTH read:user and write:repository
 ```
 
-### Examples
+## Examples
 
 **Always start here.** Nothing below `doctor` touches anything until you drop
 `--dry-run`:
@@ -170,7 +174,7 @@ gitea2github migrate --dry-run      # what exactly would happen, repo by repo?
 ```
 
 **Migrate everything you own.** Group projects, forks and archived repositories
-are left alone — see the table below:
+are left alone — see [What gets skipped](#what-gets-skipped-and-why):
 
 ```sh
 gitea2github migrate
@@ -264,7 +268,7 @@ gitea2github relink --dry-run ~/Git
 gitea2github relink ~/Git
 ```
 
-### What gets skipped, and why
+## What gets skipped, and why
 
 By default the migrator leaves alone anything where "copy it to my account" is
 not obviously the right call:
@@ -280,7 +284,7 @@ The collaboration default is the important one. Zone01 group projects live under
 one teammate's account, and republishing a teammate's repository under your own
 name is a decision you should make deliberately, not a default.
 
-### Redacting email addresses
+## Redacting email addresses
 
 A group project carries the personal email address of every teammate who ever
 committed to it. Publishing it on GitHub publishes those addresses, and none of
@@ -314,20 +318,13 @@ referenced anywhere else will not match, and commit signatures, which cannot
 survive an identity change, are dropped. Without `--redact-emails` the history is
 transferred byte for byte and hashes are preserved.
 
-### Safety properties
-
-- **Idempotent.** A repository already on GitHub is reported as `exists` and left
-  untouched, so an interrupted run is simply re-run.
-- **Nothing is deleted.** `relink` *renames* the Gitea remote to `gitea` rather
-  than removing it, so `git push gitea` still works.
-- **Secrets never reach the logs.** Tokens are injected into clone URLs at exec
-  time and redacted from all command output.
-- **No hanging.** `GIT_TERMINAL_PROMPT=0` turns a bad token into an error message
-  instead of a background worker blocked forever on an invisible prompt.
-- **Ctrl-C is clean.** Interrupting stops new work and still prints the summary
-  for what finished.
-
 ## Flags
+
+Common to every command:
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--gitea-url` | `https://platform.zone01.gr/git` | Source Gitea instance |
 
 **migrate**
 
@@ -335,12 +332,14 @@ transferred byte for byte and hashes are preserved.
 | --- | --- | --- |
 | `--dry-run` | `false` | Resolve and filter everything, change nothing |
 | `--only` | all | Comma-separated repository names |
-| `--jobs` | `4` | Repositories transferred at once |
+| `--collaborations` | `false` | Also migrate repositories owned by other Gitea users |
+| `--forks` | `false` | Also migrate forks |
+| `--archived` | `false` | Also migrate archived repositories |
 | `--private` | `false` | Force every destination private |
+| `--jobs` | `4` | Repositories transferred at once |
 | `--redact-emails` | `false` | Replace every email address in the history |
 | `--keep-email` | none | Address to leave untouched (repeatable) |
 | `--redact-domain` | `redacted.invalid` | Domain for redacted addresses |
-| `--gitea-url` | `https://platform.zone01.gr/git` | Source instance |
 
 **relink**
 
@@ -359,6 +358,21 @@ transferred byte for byte and hashes are preserved.
 | `both` | Gitea | **both servers** | `gitea`, `github` |
 | `gitea` | Gitea | Gitea | `github` |
 
+**doctor** and **list** take no flags of their own.
+
+## Safety properties
+
+- **Idempotent.** A repository already on GitHub is reported as `exists` and left
+  untouched, so an interrupted run is simply re-run.
+- **Nothing is deleted.** `relink` *renames* the Gitea remote to `gitea` rather
+  than removing it, so `git push gitea` still works.
+- **Secrets never reach the logs.** Tokens are injected into clone URLs at exec
+  time and redacted from all command output.
+- **No hanging.** `GIT_TERMINAL_PROMPT=0` turns a bad token into an error message
+  instead of a background worker blocked forever on an invisible prompt.
+- **Ctrl-C is clean.** Interrupting stops new work and still prints the summary
+  for what finished.
+
 ## Known limitations
 
 - **Git LFS objects are not carried across** by `--mirror`. Repositories using
@@ -370,8 +384,8 @@ transferred byte for byte and hashes are preserved.
 - Pull-request refs (`refs/pull/*`) are dropped. GitHub owns that namespace and
   rejects writes to it, so a mirror push carrying Gitea's copies would fail.
 - `--redact-emails` changes every commit hash and drops commit signatures. See
-  the section above before using it on a repository whose hashes are referenced
-  elsewhere.
+  [Redacting email addresses](#redacting-email-addresses) before using it on a
+  repository whose hashes are referenced elsewhere.
 
 ## License
 
