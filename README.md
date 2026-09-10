@@ -44,9 +44,10 @@ Beyond getting the git data across intact:
 - **Visibility and descriptions come along.** A private Gitea repository lands
   private rather than accidentally public, and its description comes with it
   instead of being retyped.
-- **Your laptop stops pushing to the old server.** After a hand migration your
-  local clones still point at Gitea, silently, until you notice. `relink` moves
-  `origin` to GitHub and keeps the old remote as `gitea`.
+- **Your local clones end up pointing where you want them.** After a hand
+  migration they still push to Gitea, silently, until you notice. `relink` fixes
+  that — and if you are not done with Gitea, `--push-to=both` makes a single
+  `git push` reach both servers.
 - **Thirty repositories are one command.** Transfers run in parallel, and the run
   ends with a summary of what moved, what was skipped and why.
 
@@ -228,6 +229,24 @@ gitea2github relink --dry-run ~/Git      # which clones would be repointed, and 
 gitea2github relink ~/Git                # origin -> GitHub, old remote kept as "gitea"
 ```
 
+**Still need to push to Gitea as well?** Zone01 audits happen on the Gitea
+instance, so abandoning it mid-course is not an option. One push, both servers:
+
+```sh
+gitea2github relink --push-to=both ~/Git
+```
+
+`origin` keeps fetching from Gitea and gains a second push URL, so `git push`
+sends to both. Separate `gitea` and `github` remotes are added as well, for when
+you want to aim at one on purpose.
+
+Or leave `origin` completely alone and add only a `github` remote, so pushing to
+GitHub is always deliberate:
+
+```sh
+gitea2github relink --push-to=gitea ~/Git
+```
+
 Prefer a different name for the old remote, or skip the existence check:
 
 ```sh
@@ -328,8 +347,17 @@ transferred byte for byte and hashes are preserved.
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--dry-run` | `false` | Report without changing |
-| `--keep-as` | `gitea` | New name for the old remote |
+| `--push-to` | `github` | Where clones push: `github`, `both`, or `gitea` |
+| `--keep-as` | `gitea` | New name for the old remote (`--push-to=github` only) |
 | `--verify` | `true` | Confirm the GitHub repo exists first |
+
+`--push-to` in full:
+
+| Value | `origin` fetches | `git push` goes to | Extra remotes |
+| --- | --- | --- | --- |
+| `github` | GitHub | GitHub | `gitea` (the old one, renamed) |
+| `both` | Gitea | **both servers** | `gitea`, `github` |
+| `gitea` | Gitea | Gitea | `github` |
 
 ## Known limitations
 

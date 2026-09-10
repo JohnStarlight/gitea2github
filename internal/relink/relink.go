@@ -32,6 +32,23 @@ type Result struct {
 	Reason string
 }
 
+// Modes for where a relinked clone should push.
+const (
+	// ModeGitHub moves origin to GitHub and keeps the Gitea remote under
+	// another name. For someone who is done with the old server.
+	ModeGitHub = "github"
+
+	// ModeBoth leaves origin fetching from Gitea but makes one `git push`
+	// reach both servers. This is what you want while the Gitea instance is
+	// still the one that matters -- a Zone01 student still has to push there
+	// for audits -- and GitHub is a portfolio mirror alongside it.
+	ModeBoth = "both"
+
+	// ModeGitea changes nothing about origin and simply adds a github remote,
+	// so pushing to GitHub is always an explicit act.
+	ModeGitea = "gitea"
+)
+
 // Options configures a relink sweep.
 type Options struct {
 	Root       string // directory to scan
@@ -39,8 +56,13 @@ type Options struct {
 	GitHubUser string
 	GitHubTok  string
 
-	// OldRemoteName is what the existing Gitea remote gets renamed to.
+	// OldRemoteName is what the existing Gitea remote gets renamed to under
+	// ModeGitHub.
 	OldRemoteName string
+
+	// Mode selects where a relinked clone pushes: ModeGitHub, ModeBoth or
+	// ModeGitea. Empty means ModeGitHub.
+	Mode string
 
 	// DryRun reports what would change without touching any repository.
 	DryRun bool
@@ -117,24 +139,107 @@ func relinkOne(ctx context.Context, path string, gh *github.Client, opts Options
 
 	if opts.DryRun {
 		res.Action = "planned"
+		res.Reason = plannedDescription(opts.Mode, opts.OldRemoteName)
 		return res
 	}
 
-	// Rename first, then add. Doing it in this order means that if the rename
-	// fails we have not yet destroyed anything, and if the add fails the user
-	// still has a working remote under the new name.
-	if _, err := gitOutput(ctx, path, "remote", "rename", "origin", opts.OldRemoteName); err != nil {
-		res.Action, res.Reason = "failed", fmt.Sprintf("renaming origin to %s: %v", opts.OldRemoteName, err)
-		return res
-	}
-	if _, err := gitOutput(ctx, path, "remote", "add", "origin", res.NewURL); err != nil {
-		res.Action, res.Reason = "failed", fmt.Sprintf("adding new origin: %v", err)
-		return res
+	switch opts.Mode {
+	case ModeGitea:
+		// origin is left exactly as it is; GitHub becomes an extra remote that
+		// has to be named explicitly to be pushed to.
+		if err := setRemote(ctx, path, "github", res.NewURL); err != nil {
+			res.Action, res.Reason = "failed", err.Error()
+			return res
+		}
+		opts.Log("added github remote to %s", path)
+		res.Action, res.Reason = "added", "origin unchanged, github remote added"
+
+	case ModeBoth:
+		if err := configureDualPush(ctx, path, origin, res.NewURL); err != nil {
+			res.Action, res.Reason = "failed", err.Error()
+			return res
+		}
+		opts.Log("dual push configured for %s", path)
+		res.Action, res.Reason = "dual-push", "one push reaches both servers"
+
+	default: // ModeGitHub
+		// Rename first, then add. In this order a failed rename has destroyed
+		// nothing, and a failed add still leaves a working remote under the
+		// new name.
+		if _, err := gitOutput(ctx, path, "remote", "rename", "origin", opts.OldRemoteName); err != nil {
+			res.Action, res.Reason = "failed", fmt.Sprintf("renaming origin to %s: %v", opts.OldRemoteName, err)
+			return res
+		}
+		if _, err := gitOutput(ctx, path, "remote", "add", "origin", res.NewURL); err != nil {
+			res.Action, res.Reason = "failed", fmt.Sprintf("adding new origin: %v", err)
+			return res
+		}
+		opts.Log("relinked %s -> %s", path, res.NewURL)
+		res.Action = "relinked"
 	}
 
-	opts.Log("relinked %s -> %s", path, res.NewURL)
-	res.Action = "relinked"
 	return res
+}
+
+// configureDualPush makes a single `git push` reach both servers.
+//
+// The mechanism is git's push URL list. The subtlety that makes this worth a
+// helper: as soon as a remote has any pushurl at all, git stops using the
+// remote's ordinary URL for pushing. Adding only the GitHub address would
+// therefore silently *replace* Gitea as the push target rather than adding to
+// it, which is the exact opposite of what the caller asked for. Both addresses
+// have to be listed.
+//
+// origin keeps fetching from Gitea, so pulls and the existing workflow are
+// untouched. Named remotes for each server are added as well, so a push can
+// still be aimed at one of them on purpose.
+func configureDualPush(ctx context.Context, path, giteaURL, githubURL string) error {
+	// Clear any previous list so that re-running does not accumulate
+	// duplicates. A missing key is the normal first-run state, not an error.
+	_, _ = gitOutput(ctx, path, "config", "--unset-all", "remote.origin.pushurl")
+
+	for _, url := range []string{giteaURL, githubURL} {
+		if _, err := gitOutput(ctx, path, "config", "--add", "remote.origin.pushurl", url); err != nil {
+			return fmt.Errorf("adding push url %s: %v", url, err)
+		}
+	}
+	if err := setRemote(ctx, path, "gitea", giteaURL); err != nil {
+		return err
+	}
+	return setRemote(ctx, path, "github", githubURL)
+}
+
+// setRemote points a named remote at a URL, creating it if it does not exist.
+// Written to be safe to re-run, since a relink sweep is something people repeat
+// after migrating a few more repositories.
+func setRemote(ctx context.Context, path, name, url string) error {
+	existing, err := gitOutput(ctx, path, "remote", "get-url", name)
+	if err != nil {
+		if _, err := gitOutput(ctx, path, "remote", "add", name, url); err != nil {
+			return fmt.Errorf("adding remote %s: %v", name, err)
+		}
+		return nil
+	}
+	if existing == url {
+		return nil
+	}
+	if _, err := gitOutput(ctx, path, "remote", "set-url", name, url); err != nil {
+		return fmt.Errorf("updating remote %s: %v", name, err)
+	}
+	return nil
+}
+
+// plannedDescription explains what a dry run would have done, so --dry-run is
+// informative about the chosen mode rather than just listing paths.
+func plannedDescription(mode, oldName string) string {
+	switch mode {
+	case ModeGitea:
+		return "would add a github remote, leaving origin on Gitea"
+	case ModeBoth:
+		return "would make one push reach both servers"
+	default:
+		return "would move origin to GitHub, keeping Gitea as " + oldName
+	}
 }
 
 // findRepos walks root and returns every directory that contains a .git entry.
