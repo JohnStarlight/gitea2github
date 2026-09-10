@@ -79,6 +79,21 @@ func New(baseURL, token string) *Client {
 	}
 }
 
+// AuthError reports that the token was rejected outright: wrong, expired, or
+// revoked. The remedy is to supply a different token.
+//
+// This is deliberately a separate type from ScopeError even though both arrive
+// as 4xx responses, because telling a user to widen the scopes of a token that
+// has been revoked sends them chasing the wrong problem entirely.
+type AuthError struct {
+	Endpoint string
+	Message  string
+}
+
+func (e *AuthError) Error() string {
+	return fmt.Sprintf("gitea rejected the token on %s: %s", e.Endpoint, e.Message)
+}
+
 // ScopeError reports that the token authenticated correctly but is not allowed
 // to perform the request. It is separated from generic HTTP failures because
 // the remedy is completely different: the user must mint a new token with more
@@ -166,11 +181,21 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		var apiErr struct {
 			Message string `json:"message"`
 		}
 		_ = json.NewDecoder(resp.Body).Decode(&apiErr)
+
+		// 401 and 403 look almost identical from here but call for opposite
+		// fixes: a rejected token has to be replaced, whereas a valid but
+		// narrow token has to be re-minted with more scopes. Gitea muddies the
+		// distinction by answering 403 for some revoked tokens, so when the
+		// status alone is ambiguous fall back to what the message says.
+		if resp.StatusCode == http.StatusUnauthorized ||
+			strings.Contains(apiErr.Message, "invalid username, password or token") {
+			return &AuthError{Endpoint: path, Message: apiErr.Message}
+		}
 		return &ScopeError{Endpoint: path, Message: apiErr.Message}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
