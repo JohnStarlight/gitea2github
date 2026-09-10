@@ -18,10 +18,37 @@ on GitHub for a portfolio, but it works with any Gitea instance.
 
 ## Why not just do it by hand?
 
-The manual route — create repo, copy URL, `git remote add`, `git push` — carries
-over only the branch you happen to have checked out. Every other branch and every
-tag stays behind on Gitea. This tool uses `git clone --mirror` / `git push --mirror`,
-which copies **all** refs.
+The manual route — create repo, copy URL, `git remote add`, `git push` — is not
+only tedious, it is lossy. It carries over just the branch you happen to have
+checked out; every other branch and every tag stays behind on Gitea.
+
+Knowing that, you might reach for `git push --mirror` yourself. That works right
+up until the first repository that ever had a pull request: Gitea keeps those
+under `refs/pull/*`, GitHub reserves that namespace and rejects the write, and
+the whole push fails. This tool drops those refs first.
+
+Beyond getting the git data across intact:
+
+- **Your teammates' email addresses stay private.** Every commit carries its
+  author's address, and a group project carries the address of everyone who ever
+  worked on it. Publishing the repository publishes all of them, and no manual
+  step strips them out. `--redact-emails` replaces them throughout the history —
+  in the author and committer headers *and* in the `Co-authored-by:` trailers
+  inside commit messages, which is where most people forget to look.
+- **Nothing is republished by accident.** Repositories owned by someone else,
+  forks and archived repositories are left alone unless you ask for them, so a
+  teammate's group project does not quietly become yours.
+- **An interrupted run is just re-run.** Anything already on GitHub is reported
+  as `exists` and left untouched, so you never have to remember where you got to
+  half way through thirty repositories.
+- **Visibility and descriptions come along.** A private Gitea repository lands
+  private rather than accidentally public, and its description comes with it
+  instead of being retyped.
+- **Your laptop stops pushing to the old server.** After a hand migration your
+  local clones still point at Gitea, silently, until you notice. `relink` moves
+  `origin` to GitHub and keeps the old remote as `gitea`.
+- **Thirty repositories are one command.** Transfers run in parallel, and the run
+  ends with a summary of what moved, what was skipped and why.
 
 ## Install
 
