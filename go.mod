@@ -1,3 +1,3 @@
-module gitea2github
+module github.com/JohnStarlight/gitea2github
 
-go 1.27.1
+go 1.21

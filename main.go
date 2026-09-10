@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"net/url"
@@ -28,11 +29,11 @@ import (
 	"syscall"
 	"text/tabwriter"
 
-	"gitea2github/internal/creds"
-	"gitea2github/internal/gitea"
-	"gitea2github/internal/github"
-	"gitea2github/internal/migrate"
-	"gitea2github/internal/relink"
+	"github.com/JohnStarlight/gitea2github/internal/creds"
+	"github.com/JohnStarlight/gitea2github/internal/gitea"
+	"github.com/JohnStarlight/gitea2github/internal/github"
+	"github.com/JohnStarlight/gitea2github/internal/migrate"
+	"github.com/JohnStarlight/gitea2github/internal/relink"
 )
 
 // defaultGiteaURL points at the Zone01 Greece instance, which is the audience
@@ -128,24 +129,43 @@ func cmdDoctor(ctx context.Context, args []string) error {
 		fmt.Printf("  credential   FAIL  %v\n", err)
 	} else {
 		fmt.Printf("  credential   ok    user=%s via %s\n", c.Username, c.Source)
-		if version, err := client.Version(ctx); err != nil {
-			fmt.Printf("  reachable    FAIL  %v\n", err)
-		} else {
+		settingsURL := strings.TrimRight(*giteaURL, "/") + "/user/settings/applications"
+
+		// Version needs no particular scope, so it separates "the server or the
+		// token is wrong" from "the token is fine but too narrow". Getting that
+		// order right is the whole point of this command.
+		version, err := client.Version(ctx)
+		var authErr *gitea.AuthError
+		switch {
+		case err == nil:
 			fmt.Printf("  reachable    ok    %s (Gitea %s)\n", *giteaURL, version)
-		}
-		// Listing is the operation that needs the broadest scope, so probing
-		// it here is what turns a later mysterious 403 into advice.
-		if repos, err := client.ListRepos(ctx); err != nil {
-			var scopeErr *gitea.ScopeError
-			if asScopeError(err, &scopeErr) {
-				fmt.Printf("  list repos   FAIL  %s\n", scopeErr.Message)
-				fmt.Printf("               fix   create a token with BOTH read:user and write:repository\n")
-				fmt.Printf("                     at %s/user/settings/applications\n", strings.TrimRight(*giteaURL, "/"))
+
+			// Listing needs the broadest scope of anything the migrator does,
+			// so probing it here turns a later mysterious 403 into advice.
+			if repos, err := client.ListRepos(ctx); err != nil {
+				var scopeErr *gitea.ScopeError
+				if errors.As(err, &scopeErr) {
+					fmt.Printf("  list repos   FAIL  %s\n", scopeErr.Message)
+					fmt.Printf("               fix   create a token with BOTH read:user and write:repository\n")
+					fmt.Printf("                     at %s\n", settingsURL)
+				} else {
+					fmt.Printf("  list repos   FAIL  %v\n", err)
+				}
 			} else {
-				fmt.Printf("  list repos   FAIL  %v\n", err)
+				fmt.Printf("  list repos   ok    %d repositories visible\n", len(repos))
 			}
-		} else {
-			fmt.Printf("  list repos   ok    %d repositories visible\n", len(repos))
+
+		case errors.As(err, &authErr):
+			// The saved credential is stale far more often than it is merely
+			// under-scoped, because minting a replacement token in Gitea
+			// invalidates the old one while the keychain keeps serving it.
+			fmt.Printf("  token        FAIL  the server rejected it: %s\n", authErr.Message)
+			fmt.Printf("               fix   the token is wrong, expired or revoked. Try a current one with\n")
+			fmt.Printf("                     GITEA_TOKEN=<token> gitea2github doctor\n")
+			fmt.Printf("                     Mint one at %s\n", settingsURL)
+
+		default:
+			fmt.Printf("  reachable    FAIL  %v\n", err)
 		}
 	}
 
@@ -384,20 +404,4 @@ func filterByName(repos []gitea.Repo, names []string) []gitea.Repo {
 		}
 	}
 	return out
-}
-
-// asScopeError unwraps an error chain looking for a Gitea scope failure.
-func asScopeError(err error, target **gitea.ScopeError) bool {
-	for err != nil {
-		if se, ok := err.(*gitea.ScopeError); ok {
-			*target = se
-			return true
-		}
-		u, ok := err.(interface{ Unwrap() error })
-		if !ok {
-			return false
-		}
-		err = u.Unwrap()
-	}
-	return false
 }
