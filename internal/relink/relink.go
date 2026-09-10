@@ -20,7 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gitea2github/internal/github"
+	"github.com/JohnStarlight/gitea2github/internal/github"
 )
 
 // Result records what happened to one local clone.

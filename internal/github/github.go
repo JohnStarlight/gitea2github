@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -81,7 +82,7 @@ func (c *Client) Exists(ctx context.Context, owner, name string) (bool, error) {
 		return true, nil
 	}
 	var nf *NotFoundError
-	if errorsAs(err, &nf) {
+	if errors.As(err, &nf) {
 		return false, nil
 	}
 	return false, err
@@ -205,23 +206,6 @@ func retryAfter(resp *http.Response) (time.Duration, bool) {
 		}
 	}
 	return 0, false
-}
-
-// errorsAs is a tiny wrapper so this file does not need to import "errors"
-// purely for one call site in Exists.
-func errorsAs(err error, target **NotFoundError) bool {
-	for err != nil {
-		if nf, ok := err.(*NotFoundError); ok {
-			*target = nf
-			return true
-		}
-		unwrapper, ok := err.(interface{ Unwrap() error })
-		if !ok {
-			return false
-		}
-		err = unwrapper.Unwrap()
-	}
-	return false
 }
 
 // SanitizeName maps a Gitea repository name to one GitHub will accept. GitHub

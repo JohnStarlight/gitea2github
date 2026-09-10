@@ -20,8 +20,8 @@ import (
 	"sync"
 	"time"
 
-	"gitea2github/internal/gitea"
-	"gitea2github/internal/github"
+	"github.com/JohnStarlight/gitea2github/internal/gitea"
+	"github.com/JohnStarlight/gitea2github/internal/github"
 )
 
 // Status describes how one repository fared.
