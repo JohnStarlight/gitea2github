@@ -385,10 +385,18 @@ func cmdRelink(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("relink", flag.ExitOnError)
 	giteaURL := giteaFlags(fs)
 	dryRun := fs.Bool("dry-run", false, "report what would change without touching anything")
-	oldName := fs.String("keep-as", "gitea", "name to give the existing Gitea remote")
+	oldName := fs.String("keep-as", "gitea", "name to give the existing Gitea remote (--push-to=github only)")
 	verify := fs.Bool("verify", true, "confirm the GitHub repository exists before repointing")
+	pushTo := fs.String("push-to", relink.ModeGitHub,
+		"where relinked clones should push: github, both, or gitea")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	switch *pushTo {
+	case relink.ModeGitHub, relink.ModeBoth, relink.ModeGitea:
+	default:
+		return fmt.Errorf("--push-to must be one of: %s, %s, %s (got %q)",
+			relink.ModeGitHub, relink.ModeBoth, relink.ModeGitea, *pushTo)
 	}
 	root := fs.Arg(0)
 	if root == "" {
@@ -415,6 +423,7 @@ func cmdRelink(ctx context.Context, args []string) error {
 		GitHubUser:    ghLogin,
 		GitHubTok:     ghCred.Token,
 		OldRemoteName: *oldName,
+		Mode:          *pushTo,
 		DryRun:        *dryRun,
 		Verify:        *verify,
 		Log:           func(format string, args ...any) { fmt.Printf("  "+format+"\n", args...) },
@@ -424,13 +433,9 @@ func cmdRelink(ctx context.Context, args []string) error {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ACTION\tPATH\tDETAIL")
+	fmt.Fprintln(w, "ACTION\tPATH\tGITHUB\tDETAIL")
 	for _, r := range results {
-		detail := r.Reason
-		if detail == "" {
-			detail = r.NewURL
-		}
-		fmt.Fprintf(w, "%s\t%s\t%s\n", r.Action, r.Path, detail)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.Action, r.Path, r.NewURL, r.Reason)
 	}
 	return w.Flush()
 }
