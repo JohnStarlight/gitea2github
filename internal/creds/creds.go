@@ -36,10 +36,15 @@ type Credential struct {
 //
 // Resolution order:
 //  1. GITEA_TOKEN environment variable (username defaults to GITEA_USER).
-//  2. The git credential helper chain for that host, which on macOS is
-//     typically osxkeychain. This is the same store `git push` reads, so if
-//     the user can already push to Gitea from the shell, this just works with
-//     no extra setup.
+//  2. The git credential helper chain for that host. This is the same store
+//     `git push` reads, so if the user can already push to Gitea from the
+//     shell, this just works with no extra setup.
+//
+// The second step is not tied to any operating system. `git credential fill`
+// is git's own protocol and dispatches to whatever helper is configured --
+// osxkeychain on macOS, Git Credential Manager or wincred on Windows,
+// libsecret, pass or store on Linux -- so the same code path serves every
+// platform Go and git run on.
 func Gitea(host string) (Credential, error) {
 	if tok := os.Getenv("GITEA_TOKEN"); tok != "" {
 		user := os.Getenv("GITEA_USER")
@@ -52,11 +57,52 @@ func Gitea(host string) (Credential, error) {
 		return Credential{Username: user, Token: tok, Source: "GITEA_TOKEN env"}, nil
 	}
 
-	c, err := fromGitCredentialHelper(host)
+	helpers := configuredHelpers()
+	if len(helpers) == 0 {
+		// Worth its own message: on a fresh Linux install no helper is
+		// configured at all, and "credential fill failed" would send the user
+		// hunting for a broken helper rather than a missing one.
+		return Credential{}, fmt.Errorf(
+			"no GITEA_TOKEN set and no git credential helper is configured for %s.\n"+
+				"Either set GITEA_TOKEN, or configure a helper, for example:\n"+
+				"  macOS    git config --global credential.helper osxkeychain\n"+
+				"  Windows  git config --global credential.helper manager\n"+
+				"  Linux    git config --global credential.helper libsecret   (or 'store' to keep it in a plain file)",
+			host)
+	}
+
+	c, err := fromGitCredentialHelper(host, helpers)
 	if err != nil {
-		return Credential{}, fmt.Errorf("no GITEA_TOKEN set and git credential helper failed for %s: %w", host, err)
+		return Credential{}, fmt.Errorf("no GITEA_TOKEN set and the git credential helper failed for %s: %w", host, err)
 	}
 	return c, nil
+}
+
+// configuredHelpers reports which credential helpers git will consult, in the
+// order it will try them.
+//
+// Reporting the real answer rather than assuming one matters for diagnosis: a
+// user whose token is not being found needs to know whether git is asking a
+// keychain, a plaintext file, or nothing at all.
+func configuredHelpers() []string {
+	out, err := exec.Command("git", "config", "--get-all", "credential.helper").Output()
+	if err != nil {
+		// A non-zero exit here means no helper is set, which is a legitimate
+		// state rather than a failure.
+		return nil
+	}
+
+	var helpers []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(string(out), "\n") {
+		// The same helper is commonly configured in both the system and the
+		// global gitconfig; listing it twice would just be noise.
+		if name := strings.TrimSpace(line); name != "" && !seen[name] {
+			seen[name] = true
+			helpers = append(helpers, name)
+		}
+	}
+	return helpers
 }
 
 // GitHub resolves the GitHub credential.
@@ -87,12 +133,20 @@ func GitHub() (Credential, error) {
 // terminate them with a blank line, and git writes the same attributes back
 // with username and password filled in by whichever helper answered.
 //
-// GIT_TERMINAL_PROMPT=0 is essential here. Without it, a cache miss makes git
-// block on an interactive prompt, which would hang the migrator instead of
+// Suppressing every interactive prompt is essential here, and each platform
+// has its own way of asking. Without all three of these a cache miss makes git
+// block on a prompt -- a terminal prompt, an askpass GUI, or a Git Credential
+// Manager dialog on Windows -- which would hang the migrator instead of
 // returning a clean error we can explain.
-func fromGitCredentialHelper(host string) (Credential, error) {
+func fromGitCredentialHelper(host string, helpers []string) (Credential, error) {
 	cmd := exec.Command("git", "credential", "fill")
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = append(os.Environ(),
+		"GIT_TERMINAL_PROMPT=0",
+		// Set but empty, which neutralises an inherited askpass program
+		// instead of letting it open a dialog nobody is watching.
+		"GIT_ASKPASS=",
+		"GCM_INTERACTIVE=never",
+	)
 	cmd.Stdin = strings.NewReader(fmt.Sprintf("protocol=https\nhost=%s\n\n", host))
 
 	out, err := cmd.Output()
@@ -115,8 +169,18 @@ func fromGitCredentialHelper(host string) (Credential, error) {
 		}
 	}
 	if c.Token == "" {
-		return Credential{}, fmt.Errorf("credential helper returned no password for %s", host)
+		return Credential{}, fmt.Errorf("helper %s returned no password for %s",
+			strings.Join(helpers, ", "), host)
 	}
-	c.Source = "git credential helper (osxkeychain)"
+	c.Source = describeHelpers(helpers)
 	return c, nil
+}
+
+// describeHelpers renders the helper list for the Source field, so that the
+// doctor output names the store that actually answered rather than guessing.
+func describeHelpers(helpers []string) string {
+	if len(helpers) == 0 {
+		return "git credential helper"
+	}
+	return "git credential helper (" + strings.Join(helpers, ", ") + ")"
 }
