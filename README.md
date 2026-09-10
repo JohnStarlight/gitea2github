@@ -71,6 +71,40 @@ The collaboration default is the important one. Zone01 group projects live under
 one teammate's account, and republishing a teammate's repository under your own
 name is a decision you should make deliberately, not a default.
 
+### Redacting email addresses
+
+A group project carries the personal email address of every teammate who ever
+committed to it. Publishing it on GitHub publishes those addresses, and none of
+those people agreed to that.
+
+```sh
+gitea2github migrate --redact-emails --keep-email you@example.com
+```
+
+This replaces every address in the history with a stable, non-reversible
+stand-in such as `4f2a91c0de@redacted.invalid`. Addresses are replaced in **both**
+places they occur:
+
+- the author and committer headers, which is what `git log` shows;
+- the commit message body, where `Co-authored-by: Name <addr>` trailers are very
+  common and just as public.
+
+`.invalid` is reserved by RFC 2606 and can never resolve, so a redacted address
+can never become someone else's real mailbox. The replacement is derived from a
+hash of the original, which means the same person maps to the same stand-in in
+every repository you migrate — `git shortlog` still separates contributors
+correctly — while nothing of the original address survives.
+
+Use `--keep-email` (repeatable) for your own address, so your commits stay linked
+to your GitHub profile.
+
+**This rewrites history.** Every commit hash changes, because the author and
+committer identities are part of what a commit hashes. The migrated repository
+is a parallel copy of the history rather than the same history: commit hashes
+referenced anywhere else will not match, and commit signatures, which cannot
+survive an identity change, are dropped. Without `--redact-emails` the history is
+transferred byte for byte and hashes are preserved.
+
 ### Safety properties
 
 - **Idempotent.** A repository already on GitHub is reported as `exists` and left
@@ -94,6 +128,9 @@ name is a decision you should make deliberately, not a default.
 | `--only` | all | Comma-separated repository names |
 | `--jobs` | `4` | Repositories transferred at once |
 | `--private` | `false` | Force every destination private |
+| `--redact-emails` | `false` | Replace every email address in the history |
+| `--keep-email` | none | Address to leave untouched (repeatable) |
+| `--redact-domain` | `redacted.invalid` | Domain for redacted addresses |
 | `--gitea-url` | `https://platform.zone01.gr/git` | Source instance |
 
 **relink**
@@ -112,6 +149,11 @@ name is a decision you should make deliberately, not a default.
   not the Gitea-side collaboration metadata.
 - Destination repositories are created under the authenticated user's account,
   not under organisations.
+- Pull-request refs (`refs/pull/*`) are dropped. GitHub owns that namespace and
+  rejects writes to it, so a mirror push carrying Gitea's copies would fail.
+- `--redact-emails` changes every commit hash and drops commit signatures. See
+  the section above before using it on a repository whose hashes are referenced
+  elsewhere.
 
 ## License
 

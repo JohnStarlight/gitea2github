@@ -10,6 +10,7 @@
 package migrate
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/url"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/JohnStarlight/gitea2github/internal/gitea"
 	"github.com/JohnStarlight/gitea2github/internal/github"
+	"github.com/JohnStarlight/gitea2github/internal/redact"
 )
 
 // Status describes how one repository fared.
@@ -75,6 +77,16 @@ type Options struct {
 	// network-bound, so a handful of workers is a large win, but too many
 	// simultaneous repository creations trip GitHub's secondary rate limit.
 	Concurrency int
+
+	// Mapper, when non-nil, rewrites every email address in the history before
+	// anything is pushed. A nil Mapper means the history is transferred
+	// verbatim. Expressing the choice as the presence of the collaborator
+	// rather than as a separate boolean makes an inconsistent combination
+	// impossible to construct.
+	//
+	// One Mapper is shared by every worker so that a person who appears in
+	// several repositories is redacted to the same address in all of them.
+	Mapper *redact.Mapper
 
 	// WorkDir holds the temporary mirror clones. When empty a directory under
 	// the system temp location is created and removed afterwards.
@@ -192,6 +204,9 @@ func migrateOne(ctx context.Context, repo gitea.Repo, gh *github.Client, opts Op
 	}
 
 	if opts.DryRun {
+		if opts.Mapper != nil {
+			return finish(StatusPlanned, "would clone, redact emails, create and push")
+		}
 		return finish(StatusPlanned, "would clone, create and push")
 	}
 
@@ -206,6 +221,28 @@ func migrateOne(ctx context.Context, repo gitea.Repo, gh *github.Client, opts Op
 	// thirty-repository run does not accumulate thirty working copies.
 	defer os.RemoveAll(mirrorPath)
 
+	// A mirror clone of a Gitea repository also copies the pull-request refs
+	// under refs/pull/. GitHub owns that namespace and rejects any push into
+	// it, which would fail the whole mirror push, so drop them here.
+	if out, err := pruneUnpushableRefs(ctx, mirrorPath); err != nil {
+		return finish(StatusFailed, fmt.Sprintf("pruning refs: %v: %s", err, out))
+	}
+
+	// --- Optional email redaction ------------------------------------------
+	// Rewriting has to happen between clone and push: it needs the full history
+	// locally, and the point is that the un-redacted version never reaches
+	// GitHub at all.
+	pushFrom := mirrorPath
+	if opts.Mapper != nil {
+		opts.Log("redacting email addresses in %s", repo.FullName)
+		rewritten := mirrorPath + ".redacted"
+		if err := rewriteHistory(ctx, mirrorPath, rewritten, opts.Mapper); err != nil {
+			return finish(StatusFailed, fmt.Sprintf("redacting emails: %v", err))
+		}
+		defer os.RemoveAll(rewritten)
+		pushFrom = rewritten
+	}
+
 	// --- Create on GitHub --------------------------------------------------
 	private := repo.Private || opts.ForcePrivate
 	opts.Log("creating github.com/%s/%s", opts.GitHubUser, target)
@@ -217,7 +254,7 @@ func migrateOne(ctx context.Context, repo gitea.Repo, gh *github.Client, opts Op
 	// --- Mirror push -------------------------------------------------------
 	pushURL := withCredentials(created.CloneURL, "x-access-token", opts.GitHubTok)
 	opts.Log("pushing %s", repo.FullName)
-	if out, err := runGit(ctx, mirrorPath, opts.GitHubTok, "push", "--mirror", pushURL); err != nil {
+	if out, err := runGit(ctx, pushFrom, opts.GitHubTok, "push", "--mirror", pushURL); err != nil {
 		return finish(StatusFailed, fmt.Sprintf("push failed: %v: %s", err, out))
 	}
 
@@ -255,15 +292,110 @@ func runGit(ctx context.Context, dir, secret string, args ...string) (string, er
 		"GCM_INTERACTIVE=never",
 	)
 	out, err := cmd.CombinedOutput()
-	return redact(string(out), secret), err
+	return redactSecret(string(out), secret), err
 }
 
-// redact removes a secret from text destined for logs or error messages. git
-// echoes the remote URL in several of its messages, and that URL carries the
-// token we just injected.
-func redact(text, secret string) string {
+// redactSecret removes a token from text destined for logs or error messages.
+// git echoes the remote URL in several of its messages, and that URL carries
+// the token we just injected.
+//
+// Named to keep it distinct from the redact package, which redacts email
+// addresses out of history rather than secrets out of output.
+func redactSecret(text, secret string) string {
 	if secret == "" {
 		return strings.TrimSpace(text)
 	}
 	return strings.TrimSpace(strings.ReplaceAll(text, secret, "***"))
+}
+
+// pruneUnpushableRefs deletes refs that the destination will refuse.
+//
+// GitHub reserves refs/pull/ for its own pull-request machinery and rejects any
+// attempt to write there. Gitea keeps its pull requests in the same namespace,
+// and a mirror clone copies them, so every repository that ever had a pull
+// request would otherwise fail at the final push.
+func pruneUnpushableRefs(ctx context.Context, repoPath string) (string, error) {
+	out, err := runGit(ctx, repoPath, "", "for-each-ref", "--format=%(refname)", "refs/pull")
+	if err != nil {
+		return out, err
+	}
+	for _, ref := range strings.Fields(out) {
+		if msg, err := runGit(ctx, repoPath, "", "update-ref", "-d", ref); err != nil {
+			return msg, fmt.Errorf("deleting %s: %w", ref, err)
+		}
+	}
+	return "", nil
+}
+
+// rewriteHistory produces a new bare repository at dst holding the history of
+// src with every email address replaced.
+//
+// It works by streaming `git fast-export` through the redaction filter into
+// `git fast-import`. Going through a second repository rather than rewriting in
+// place means a failure part way through leaves the original mirror intact and
+// nothing half-rewritten is ever pushed.
+//
+// Every commit hash changes as a result, because the author and committer
+// identities are part of what a commit hashes. The migrated history is
+// therefore a parallel copy rather than the same history, and commit
+// signatures, which cannot survive an identity change, are dropped.
+func rewriteHistory(ctx context.Context, src, dst string, m *redact.Mapper) error {
+	if out, err := runGit(ctx, "", "", "init", "--bare", "--quiet", dst); err != nil {
+		return fmt.Errorf("creating rewrite target: %v: %s", err, out)
+	}
+
+	// --signed-tags=strip: a tag signature covers the old object, so it is
+	// invalid the moment anything is rewritten; keeping it would produce tags
+	// that fail verification rather than tags that are honestly unsigned.
+	export := exec.CommandContext(ctx, "git", "-C", src, "fast-export", "--all",
+		"--signed-tags=strip", "--tag-of-filtered-object=rewrite", "--use-done-feature")
+	imp := exec.CommandContext(ctx, "git", "-C", dst, "fast-import", "--quiet", "--done")
+
+	var exportErr, importErr bytes.Buffer
+	export.Stderr = &exportErr
+	imp.Stderr = &importErr
+
+	exported, err := export.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	imported, err := imp.StdinPipe()
+	if err != nil {
+		return err
+	}
+
+	if err := export.Start(); err != nil {
+		return fmt.Errorf("starting fast-export: %w", err)
+	}
+	if err := imp.Start(); err != nil {
+		return fmt.Errorf("starting fast-import: %w", err)
+	}
+
+	filterErr := redact.FilterStream(exported, imported, m)
+
+	// Close the import side first: fast-import only finishes once its stdin is
+	// closed, so waiting before closing would deadlock.
+	closeErr := imported.Close()
+	importWait := imp.Wait()
+	exportWait := export.Wait()
+
+	switch {
+	case filterErr != nil:
+		return fmt.Errorf("filtering history: %w", filterErr)
+	case closeErr != nil:
+		return fmt.Errorf("closing fast-import input: %w", closeErr)
+	case exportWait != nil:
+		return fmt.Errorf("fast-export: %v: %s", exportWait, strings.TrimSpace(exportErr.String()))
+	case importWait != nil:
+		return fmt.Errorf("fast-import: %v: %s", importWait, strings.TrimSpace(importErr.String()))
+	}
+
+	// fast-import recreates refs but not HEAD, and a bare repository with a
+	// dangling HEAD makes the destination pick an arbitrary default branch.
+	if head, err := runGit(ctx, src, "", "symbolic-ref", "HEAD"); err == nil && head != "" {
+		if out, err := runGit(ctx, dst, "", "symbolic-ref", "HEAD", head); err != nil {
+			return fmt.Errorf("setting HEAD to %s: %v: %s", head, err, out)
+		}
+	}
+	return nil
 }

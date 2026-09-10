@@ -33,6 +33,7 @@ import (
 	"github.com/JohnStarlight/gitea2github/internal/gitea"
 	"github.com/JohnStarlight/gitea2github/internal/github"
 	"github.com/JohnStarlight/gitea2github/internal/migrate"
+	"github.com/JohnStarlight/gitea2github/internal/redact"
 	"github.com/JohnStarlight/gitea2github/internal/relink"
 )
 
@@ -241,8 +242,15 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	private := fs.Bool("private", false, "create every GitHub repository private, regardless of Gitea visibility")
 	concurrency := fs.Int("jobs", 4, "how many repositories to transfer at once")
 	only := fs.String("only", "", "comma-separated repository names to migrate (default: all visible)")
+	redactEmails := fs.Bool("redact-emails", false, "replace every email address in the history before pushing")
+	redactDomain := fs.String("redact-domain", redact.DefaultDomain, "domain to point redacted addresses at")
+	var keepEmails stringList
+	fs.Var(&keepEmails, "keep-email", "address to leave untouched when redacting (repeatable)")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if len(keepEmails) > 0 && !*redactEmails {
+		return fmt.Errorf("--keep-email has no effect without --redact-emails")
 	}
 
 	client, giteaCred, err := resolveGitea(*giteaURL)
@@ -287,6 +295,14 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		fmt.Printf("  "+format+"\n", args...)
 	}
 
+	// A single Mapper is shared by every worker so that one person is redacted
+	// to the same replacement address across all of the migrated repositories.
+	var mapper *redact.Mapper
+	if *redactEmails {
+		mapper = redact.NewMapper(*redactDomain, keepEmails)
+		fmt.Printf("Redacting email addresses; %d address(es) kept as-is\n", len(keepEmails))
+	}
+
 	results := migrate.Run(ctx, repos, migrate.Options{
 		GiteaUser:             giteaCred.Username,
 		GiteaToken:            giteaCred.Token,
@@ -298,9 +314,13 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		ForcePrivate:          *private,
 		DryRun:                *dryRun,
 		Concurrency:           *concurrency,
+		Mapper:                mapper,
 		Log:                   logf,
 	})
 
+	if mapper != nil {
+		fmt.Printf("\n%d distinct email address(es) replaced\n", mapper.Count())
+	}
 	return printSummary(results)
 }
 
@@ -404,4 +424,20 @@ func filterByName(repos []gitea.Repo, names []string) []gitea.Repo {
 		}
 	}
 	return out
+}
+
+// stringList collects a flag that may be repeated, so that several addresses
+// can be kept with separate --keep-email arguments rather than one
+// comma-separated value that would break on any address containing a comma.
+type stringList []string
+
+func (l *stringList) String() string { return strings.Join(*l, ",") }
+
+func (l *stringList) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fmt.Errorf("empty value")
+	}
+	*l = append(*l, value)
+	return nil
 }
