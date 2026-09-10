@@ -112,3 +112,7 @@ name is a decision you should make deliberately, not a default.
   not the Gitea-side collaboration metadata.
 - Destination repositories are created under the authenticated user's account,
   not under organisations.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
