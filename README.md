@@ -6,6 +6,16 @@ tag intact** — and repoint your local clones at the new home.
 Built for [Zone01](https://platform.zone01.gr) students who want their coursework
 on GitHub for a portfolio, but it works with any Gitea instance.
 
+[Install](#install) ·
+[Platform support](#platform-support) ·
+[Credentials](#credentials) ·
+[Usage](#usage) ·
+[Examples](#examples) ·
+[What gets skipped](#what-gets-skipped-and-why) ·
+[Redacting emails](#redacting-email-addresses) ·
+[Flags](#flags) ·
+[Limitations](#known-limitations)
+
 ## Why not just do it by hand?
 
 The manual route — create repo, copy URL, `git remote add`, `git push` — carries
@@ -23,15 +33,12 @@ Or from a checkout: `go build -o gitea2github .`
 
 ## Platform support
 
-Pure Go with no third-party dependencies, driving the `git` command line. It
-builds and runs anywhere Go and git do — verified to cross-compile for
-linux/amd64, linux/arm64, windows/amd64, darwin/arm64 and freebsd/amd64.
+macOS, Linux, Windows, BSD — anywhere Go and git run. Pure Go, no third-party
+dependencies, and no per-OS code: credential storage, the one part that really
+differs, is left to git itself.
 
-There is no operating-system branching anywhere in the code. Credential storage,
-the one part that genuinely differs per platform, is delegated to git itself.
-
-Requirements: **Go 1.21+** to build, and **git** on `PATH` at run time. The `gh`
-CLI is optional — it is only one of the two ways to supply a GitHub token.
+Needs **Go 1.21+** to build and **git** on `PATH` to run. The `gh` CLI is
+optional.
 
 ## Credentials
 
