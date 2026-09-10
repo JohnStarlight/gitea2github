@@ -21,14 +21,42 @@ go install github.com/JohnStarlight/gitea2github@latest
 
 Or from a checkout: `go build -o gitea2github .`
 
+## Platform support
+
+Pure Go with no third-party dependencies, driving the `git` command line. It
+builds and runs anywhere Go and git do — verified to cross-compile for
+linux/amd64, linux/arm64, windows/amd64, darwin/arm64 and freebsd/amd64.
+
+There is no operating-system branching anywhere in the code. Credential storage,
+the one part that genuinely differs per platform, is delegated to git itself.
+
+Requirements: **Go 1.21+** to build, and **git** on `PATH` at run time. The `gh`
+CLI is optional — it is only one of the two ways to supply a GitHub token.
+
 ## Credentials
 
 Nothing to configure if you already use Gitea and GitHub from the shell:
 
 | Service | Looked up in order |
 | --- | --- |
-| Gitea | `GITEA_TOKEN` env var → your git credential helper (macOS keychain) |
+| Gitea | `GITEA_TOKEN` env var → your git credential helper |
 | GitHub | `GITHUB_TOKEN` env var → the `gh` CLI |
+
+The credential helper step is `git credential fill`, git's own protocol, so it
+uses whatever store you already have: **osxkeychain** on macOS, **Git Credential
+Manager** or **wincred** on Windows, **libsecret**, **pass** or **store** on
+Linux. If you can already `git push` to your Gitea from the shell, there is
+nothing to set up. If no helper is configured, set `GITEA_TOKEN` instead — or
+configure one:
+
+```sh
+git config --global credential.helper osxkeychain   # macOS
+git config --global credential.helper manager       # Windows
+git config --global credential.helper libsecret     # Linux
+```
+
+`doctor` names the helper that actually answered, so you can tell a missing
+token from a missing helper.
 
 Your Gitea token needs **both** `read:user` and `write:repository` scopes.
 `read:user` is the one people miss — without it the API refuses to *list* your
