@@ -124,12 +124,27 @@ func cmdDoctor(ctx context.Context, args []string) error {
 		return err
 	}
 
+	// Every line of this report is one check in a fixed-width column, and the
+	// remedies are multi-line, so failures are printed through a helper that
+	// keeps the continuation lines aligned under the first.
+	failures := 0
+	ok := func(check, format string, args ...any) {
+		fmt.Printf("  %-12s ok    %s\n", check, fmt.Sprintf(format, args...))
+	}
+	fail := func(check, format string, args ...any) {
+		failures++
+		fmt.Printf("  %-12s FAIL  %s\n", check, alignContinuation(fmt.Sprintf(format, args...)))
+	}
+	hint := func(format string, args ...any) {
+		fmt.Printf("               fix   %s\n", alignContinuation(fmt.Sprintf(format, args...)))
+	}
+
 	fmt.Println("Gitea")
 	client, c, err := resolveGitea(*giteaURL)
 	if err != nil {
-		fmt.Printf("  credential   FAIL  %v\n", err)
+		fail("credential", "%v", err)
 	} else {
-		fmt.Printf("  credential   ok    user=%s via %s\n", c.Username, c.Source)
+		ok("credential", "user=%s via %s", c.Username, c.Source)
 		settingsURL := strings.TrimRight(*giteaURL, "/") + "/user/settings/applications"
 
 		// Version needs no particular scope, so it separates "the server or the
@@ -139,51 +154,62 @@ func cmdDoctor(ctx context.Context, args []string) error {
 		var authErr *gitea.AuthError
 		switch {
 		case err == nil:
-			fmt.Printf("  reachable    ok    %s (Gitea %s)\n", *giteaURL, version)
+			ok("reachable", "%s (Gitea %s)", *giteaURL, version)
 
 			// Listing needs the broadest scope of anything the migrator does,
 			// so probing it here turns a later mysterious 403 into advice.
 			if repos, err := client.ListRepos(ctx); err != nil {
 				var scopeErr *gitea.ScopeError
 				if errors.As(err, &scopeErr) {
-					fmt.Printf("  list repos   FAIL  %s\n", scopeErr.Message)
-					fmt.Printf("               fix   create a token with BOTH read:user and write:repository\n")
-					fmt.Printf("                     at %s\n", settingsURL)
+					fail("list repos", "%s", scopeErr.Message)
+					hint("create a token with BOTH read:user and write:repository\nat %s", settingsURL)
 				} else {
-					fmt.Printf("  list repos   FAIL  %v\n", err)
+					fail("list repos", "%v", err)
 				}
 			} else {
-				fmt.Printf("  list repos   ok    %d repositories visible\n", len(repos))
+				ok("list repos", "%d repositories visible", len(repos))
 			}
 
 		case errors.As(err, &authErr):
 			// The saved credential is stale far more often than it is merely
 			// under-scoped, because minting a replacement token in Gitea
 			// invalidates the old one while the keychain keeps serving it.
-			fmt.Printf("  token        FAIL  the server rejected it: %s\n", authErr.Message)
-			fmt.Printf("               fix   the token is wrong, expired or revoked. Try a current one with\n")
-			fmt.Printf("                     GITEA_TOKEN=<token> gitea2github doctor\n")
-			fmt.Printf("                     Mint one at %s\n", settingsURL)
+			fail("token", "the server rejected it: %s", authErr.Message)
+			hint("the token is wrong, expired or revoked. Try a current one with\nGITEA_TOKEN=<token> gitea2github doctor\nMint one at %s", settingsURL)
 
 		default:
-			fmt.Printf("  reachable    FAIL  %v\n", err)
+			fail("reachable", "%v", err)
 		}
 	}
 
 	fmt.Println("\nGitHub")
 	ghCred, err := creds.GitHub()
 	if err != nil {
-		fmt.Printf("  credential   FAIL  %v\n", err)
-		return nil
+		fail("credential", "%v", err)
+	} else {
+		ok("credential", "via %s", ghCred.Source)
+		if login, err := github.New(ghCred.Token).Login(ctx); err != nil {
+			fail("identity", "%v", err)
+		} else {
+			ok("identity", "%s", login)
+		}
 	}
-	fmt.Printf("  credential   ok    via %s\n", ghCred.Source)
-	login, err := github.New(ghCred.Token).Login(ctx)
-	if err != nil {
-		fmt.Printf("  identity     FAIL  %v\n", err)
-		return nil
+
+	// A non-zero exit lets doctor be used as a precondition in a script, which
+	// silently returning success would make impossible.
+	if failures > 0 {
+		fmt.Println()
+		return fmt.Errorf("%d check(s) failed; see above", failures)
 	}
-	fmt.Printf("  identity     ok    %s\n", login)
 	return nil
+}
+
+// alignContinuation indents every line after the first far enough to sit under
+// the start of the message column, so a multi-line remedy does not break the
+// report's layout.
+func alignContinuation(msg string) string {
+	const column = "                     " // width of "  <check>    FAIL  "
+	return strings.ReplaceAll(msg, "\n", "\n"+column)
 }
 
 // cmdList prints the repositories the migrator can see, with the reason any of

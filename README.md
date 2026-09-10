@@ -58,6 +58,46 @@ git config --global credential.helper libsecret     # Linux
 `doctor` names the helper that actually answered, so you can tell a missing
 token from a missing helper.
 
+### If you have not set anything up
+
+Nothing bad happens: the tool refuses to start rather than doing half a
+migration. `migrate` resolves both credentials **before** it contacts either
+server, so a missing token means no repository is cloned, created or pushed, and
+the process exits non-zero having changed nothing.
+
+Run `doctor` and it tells you which half is missing and what to do:
+
+```
+Gitea
+  credential   FAIL  no GITEA_TOKEN set and no git credential helper is configured for platform.zone01.gr.
+                     Either set GITEA_TOKEN, or configure a helper, for example:
+                       macOS    git config --global credential.helper osxkeychain
+                       Windows  git config --global credential.helper manager
+                       Linux    git config --global credential.helper libsecret
+
+GitHub
+  credential   FAIL  no GITHUB_TOKEN set and `gh auth token` failed (is the gh CLI installed and logged in?)
+
+error: 2 check(s) failed; see above
+```
+
+The more common case is a helper that *is* configured but has nothing saved for
+your Gitea yet — normal before your first token. That is reported separately,
+with the command that fixes it:
+
+```
+  credential   FAIL  no credential stored for platform.zone01.gr by osxkeychain
+                     Store one with:
+                       printf 'protocol=https\nhost=platform.zone01.gr\nusername=<user>\npassword=<token>\n\n' | git credential approve
+                     or set GITEA_TOKEN instead.
+                     git said: fatal: could not read Username for '...': terminal prompts disabled
+```
+
+You are never left waiting at an invisible prompt: interactive prompting is
+disabled on every git call, so a missing credential is always an error message
+rather than a hang. `doctor` exits non-zero when any check fails, so it can be
+used as a precondition in a script.
+
 Your Gitea token needs **both** `read:user` and `write:repository` scopes.
 `read:user` is the one people miss — without it the API refuses to *list* your
 repositories, even though the token can read and write them individually. Create
@@ -81,6 +121,94 @@ Gitea
   reachable    ok    https://platform.zone01.gr/git (Gitea 1.27.2)
   list repos   FAIL  token does not have at least one of required scope(s), ...
                fix   create a token with BOTH read:user and write:repository
+```
+
+### Examples
+
+**Always start here.** Nothing below `doctor` touches anything until you drop
+`--dry-run`:
+
+```sh
+gitea2github doctor                 # do my credentials work, and do they have the right scopes?
+gitea2github list                   # what can it see, and how does it classify each one?
+gitea2github migrate --dry-run      # what exactly would happen, repo by repo?
+```
+
+**Migrate everything you own.** Group projects, forks and archived repositories
+are left alone — see the table below:
+
+```sh
+gitea2github migrate
+```
+
+**Migrate one repository**, which is the sane way to test the real path for the
+first time:
+
+```sh
+gitea2github migrate --only linear-stats
+```
+
+Several at once, comma-separated:
+
+```sh
+gitea2github migrate --only linear-stats,go-reloaded,tetris-optimizer
+```
+
+**Include group projects, without publishing your teammates' addresses.** This
+is the combination most Zone01 students actually want:
+
+```sh
+gitea2github migrate --collaborations --redact-emails --keep-email you@example.com
+```
+
+`--collaborations` opts in to repositories owned by someone else, and
+`--redact-emails` makes sure that doing so does not publish their personal
+addresses. `--keep-email` exempts your own, so your commits stay linked to your
+GitHub profile.
+
+**Keep everything private on the GitHub side**, regardless of how it was set on
+Gitea — useful for coursework you are not ready to show yet:
+
+```sh
+gitea2github migrate --private
+```
+
+**Go slower.** Creating repositories in a burst can trip GitHub's secondary rate
+limit; one at a time is the safe setting for a large account:
+
+```sh
+gitea2github migrate --jobs 1
+```
+
+**A Gitea that is not Zone01's:**
+
+```sh
+gitea2github migrate --gitea-url https://gitea.example.com
+```
+
+**Repoint your local clones** once the repositories are across. Check first,
+then do it:
+
+```sh
+gitea2github relink --dry-run ~/Git      # which clones would be repointed, and where?
+gitea2github relink ~/Git                # origin -> GitHub, old remote kept as "gitea"
+```
+
+Prefer a different name for the old remote, or skip the existence check:
+
+```sh
+gitea2github relink --keep-as zone01 ~/Git
+gitea2github relink --verify=false ~/Git
+```
+
+**Everything, carefully, in one sequence:**
+
+```sh
+gitea2github doctor
+gitea2github migrate --dry-run --collaborations --redact-emails --keep-email you@example.com
+gitea2github migrate --collaborations --redact-emails --keep-email you@example.com --jobs 2
+gitea2github relink --dry-run ~/Git
+gitea2github relink ~/Git
 ```
 
 ### What gets skipped, and why
