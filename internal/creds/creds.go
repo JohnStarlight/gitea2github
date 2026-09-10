@@ -16,6 +16,8 @@ package creds
 
 import (
 	"bufio"
+	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -73,6 +75,12 @@ func Gitea(host string) (Credential, error) {
 
 	c, err := fromGitCredentialHelper(host, helpers)
 	if err != nil {
+		// A NoCredentialError already names the host and the remedy; wrapping
+		// it only repeats them.
+		var noCred *NoCredentialError
+		if errors.As(err, &noCred) {
+			return Credential{}, err
+		}
 		return Credential{}, fmt.Errorf("no GITEA_TOKEN set and the git credential helper failed for %s: %w", host, err)
 	}
 	return c, nil
@@ -149,9 +157,20 @@ func fromGitCredentialHelper(host string, helpers []string) (Credential, error) 
 	)
 	cmd.Stdin = strings.NewReader(fmt.Sprintf("protocol=https\nhost=%s\n\n", host))
 
+	// Output() discards stderr, and stderr is where git explains itself. Losing
+	// it turned the single most common first-run failure -- a helper that is
+	// configured but has nothing stored for this host yet -- into a bare
+	// "exit status 128".
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
 	out, err := cmd.Output()
 	if err != nil {
-		return Credential{}, fmt.Errorf("git credential fill: %w", err)
+		return Credential{}, &NoCredentialError{
+			Host:    host,
+			Helpers: helpers,
+			Detail:  strings.TrimSpace(stderr.String()),
+		}
 	}
 
 	var c Credential
@@ -169,11 +188,35 @@ func fromGitCredentialHelper(host string, helpers []string) (Credential, error) 
 		}
 	}
 	if c.Token == "" {
-		return Credential{}, fmt.Errorf("helper %s returned no password for %s",
-			strings.Join(helpers, ", "), host)
+		return Credential{}, &NoCredentialError{Host: host, Helpers: helpers}
 	}
 	c.Source = describeHelpers(helpers)
 	return c, nil
+}
+
+// NoCredentialError reports that the helper chain is working but has nothing
+// stored for this host. That is the ordinary state before a user has saved a
+// token for the first time, not a malfunction, so it carries the command that
+// fixes it rather than just a failure code.
+type NoCredentialError struct {
+	Host    string
+	Helpers []string
+	Detail  string // git's own stderr, when it said anything useful
+}
+
+func (e *NoCredentialError) Error() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "no credential stored for %s", e.Host)
+	if len(e.Helpers) > 0 {
+		fmt.Fprintf(&b, " by %s", strings.Join(e.Helpers, ", "))
+	}
+	b.WriteString("\nStore one with:\n")
+	fmt.Fprintf(&b, "  printf 'protocol=https\\nhost=%s\\nusername=<user>\\npassword=<token>\\n\\n' | git credential approve\n", e.Host)
+	b.WriteString("or set GITEA_TOKEN instead.")
+	if e.Detail != "" {
+		fmt.Fprintf(&b, "\ngit said: %s", e.Detail)
+	}
+	return b.String()
 }
 
 // describeHelpers renders the helper list for the Source field, so that the
