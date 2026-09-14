@@ -274,7 +274,7 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	collabs := fs.Bool("collaborations", false, "also migrate repositories owned by other Gitea users")
 	forks := fs.Bool("forks", false, "also migrate forks")
 	archived := fs.Bool("archived", false, "also migrate archived repositories")
-	private := fs.Bool("private", false, "create every GitHub repository private, regardless of Gitea visibility")
+	public := fs.Bool("public", false, "carry the Gitea visibility across; without it every repository is created private")
 	concurrency := fs.Int("jobs", 4, "how many repositories to transfer at once")
 	only := fs.String("only", "", "comma-separated repository names to migrate (default: all visible)")
 	redactEmails := fs.Bool("redact-emails", false, "replace every email address in the history before pushing")
@@ -359,8 +359,8 @@ func cmdMigrate(ctx context.Context, args []string) error {
 				keepEmails = append(keepEmails, own)
 			}
 		}
-		if !given["private"] {
-			*private = prompt.Confirm("Create the GitHub repositories private?", false)
+		if !given["public"] {
+			*public = prompt.Confirm("Create the GitHub repositories public?", false)
 		}
 	}
 
@@ -379,7 +379,7 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		IncludeCollaborations: *collabs,
 		IncludeForks:          *forks,
 		IncludeArchived:       *archived,
-		ForcePrivate:          *private,
+		AllowPublic:           *public,
 		Concurrency:           *concurrency,
 		Mapper:                mapper,
 	}

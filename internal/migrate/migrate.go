@@ -65,9 +65,16 @@ type Options struct {
 	IncludeForks    bool
 	IncludeArchived bool
 
-	// Private forces every destination repository private. When false the
-	// visibility of the Gitea repository is carried across unchanged.
-	ForcePrivate bool
+	// AllowPublic carries the source repository's visibility across instead of
+	// making every destination private.
+	//
+	// The polarity is deliberate. A zero-valued Options publishes nothing, so
+	// the failure mode of forgetting to set this field is a repository that is
+	// too private rather than one that is too public. Note that it only ever
+	// grants what the source already had: a private Gitea repository stays
+	// private either way, because carrying visibility across must never mean
+	// exposing something that was not exposed before.
+	AllowPublic bool
 
 	// DryRun resolves and filters everything but performs no clone, no
 	// creation and no push. Always the right first invocation.
@@ -244,7 +251,7 @@ func migrateOne(ctx context.Context, repo gitea.Repo, gh *github.Client, opts Op
 	}
 
 	// --- Create on GitHub --------------------------------------------------
-	private := repo.Private || opts.ForcePrivate
+	private := destinationIsPrivate(repo, opts.AllowPublic)
 	opts.Log("creating github.com/%s/%s", opts.GitHubUser, target)
 	created, err := gh.CreateRepo(ctx, target, repo.Description, private)
 	if err != nil {
@@ -398,4 +405,16 @@ func rewriteHistory(ctx context.Context, src, dst string, m *redact.Mapper) erro
 		}
 	}
 	return nil
+}
+
+// destinationIsPrivate decides the visibility of the repository about to be
+// created on GitHub.
+//
+// Pulled out of the migration path purely so the polarity can be tested. It is
+// one boolean expression, but getting it backwards would publish private work,
+// which is not a mistake worth discovering in production.
+func destinationIsPrivate(source gitea.Repo, allowPublic bool) bool {
+	// A source that is private stays private no matter what: allowing public
+	// destinations means carrying visibility across, never widening it.
+	return source.Private || !allowPublic
 }
