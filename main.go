@@ -274,7 +274,8 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	collabs := fs.Bool("collaborations", false, "also migrate repositories owned by other Gitea users")
 	forks := fs.Bool("forks", false, "also migrate forks")
 	archived := fs.Bool("archived", false, "also migrate archived repositories")
-	public := fs.Bool("public", false, "carry the Gitea visibility across; without it every repository is created private")
+	visibility := fs.String("visibility", "mirror",
+		"visibility of the created repositories: mirror, private, or public")
 	concurrency := fs.Int("jobs", 4, "how many repositories to transfer at once")
 	only := fs.String("only", "", "comma-separated repository names to migrate (default: all visible)")
 	redactEmails := fs.Bool("redact-emails", false, "replace every email address in the history before pushing")
@@ -286,6 +287,17 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	}
 	if len(keepEmails) > 0 && !*redactEmails {
 		return fmt.Errorf("--keep-email has no effect without --redact-emails")
+	}
+	var mode migrate.VisibilityMode
+	switch *visibility {
+	case "mirror":
+		mode = migrate.VisibilityMirror
+	case "private":
+		mode = migrate.VisibilityPrivate
+	case "public":
+		mode = migrate.VisibilityPublic
+	default:
+		return fmt.Errorf("--visibility must be mirror, private or public (got %q)", *visibility)
 	}
 
 	// Which flags the user actually typed. Anything they set explicitly is
@@ -359,9 +371,6 @@ func cmdMigrate(ctx context.Context, args []string) error {
 				keepEmails = append(keepEmails, own)
 			}
 		}
-		if !given["public"] {
-			*public = prompt.Confirm("Create the GitHub repositories public?", false)
-		}
 	}
 
 	// A single Mapper is shared by every worker so that one person is redacted
@@ -379,7 +388,7 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		IncludeCollaborations: *collabs,
 		IncludeForks:          *forks,
 		IncludeArchived:       *archived,
-		AllowPublic:           *public,
+		Visibility:            mode,
 		Concurrency:           *concurrency,
 		Mapper:                mapper,
 	}
@@ -397,20 +406,36 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		return nil
 	}
 
-	pending := countStatus(plan, migrate.StatusPlanned)
-	if pending == 0 {
+	pending := plannedIndices(plan)
+	if len(pending) == 0 {
 		fmt.Println("Nothing to do.")
 		return nil
+	}
+
+	// Visibility is chosen per repository, from the plan the user is looking
+	// at, because no single answer is right for a whole account. Doing nothing
+	// keeps each repository exactly as it is on Gitea.
+	if prompt.Interactive() && !*assumeYes {
+		if overrides := askVisibilityFlips(prompt, plan, pending); len(overrides) > 0 {
+			options.VisibilityOverride = overrides
+			for name, private := range overrides {
+				for i := range plan {
+					if plan[i].Source == name {
+						plan[i].Private = private
+					}
+				}
+			}
+		}
 	}
 
 	// The point of no return. Everything above this line is read-only.
 	if !*assumeYes {
 		if !prompt.Interactive() {
 			return fmt.Errorf("refusing to change anything without a terminal to confirm on; "+
-				"pass --yes to proceed or --dry-run to preview (%d repositories would be migrated)", pending)
+				"pass --yes to proceed or --dry-run to preview (%d repositories would be migrated)", len(pending))
 		}
 		question := fmt.Sprintf("\nMigrate %d repositor%s to github.com/%s?",
-			pending, plural(pending, "y", "ies"), ghLogin)
+			len(pending), plural(len(pending), "y", "ies"), ghLogin)
 		if !prompt.Confirm(question, false) {
 			fmt.Println("Cancelled; nothing was changed.")
 			return nil
@@ -441,18 +466,38 @@ func cmdMigrate(ctx context.Context, args []string) error {
 // printResults renders the per-repository outcome table and the tally beneath
 // it. It deliberately returns nothing: the same renderer prints the plan and
 // the outcome, and a plan is not a failure even when it contains problems.
+//
+// Rows that will actually be created are numbered, because the plan doubles as
+// the list the user picks from when choosing visibility. Numbering only those
+// rows keeps the numbers meaningful: there is nothing to choose about a
+// repository that is being skipped.
 func printResults(results []migrate.Result) {
 	fmt.Println()
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "STATUS\tREPOSITORY\tDETAIL")
+	fmt.Fprintln(w, "  #\tSTATUS\tREPOSITORY\tVISIBILITY\tDETAIL")
+
 	counts := map[migrate.Status]int{}
+	number := 0
 	for _, r := range results {
 		counts[r.Status]++
+
+		label, visibility := "", ""
+		if r.Status == migrate.StatusPlanned {
+			number++
+			label = fmt.Sprintf("%3d", number)
+			visibility = visibilityWord(r.Private)
+			// Flag the ones whose visibility would differ from Gitea's, so a
+			// deliberate change is visible and an accidental one is obvious.
+			if r.Private != r.SourcePrivate {
+				visibility += " (was " + visibilityWord(r.SourcePrivate) + ")"
+			}
+		}
+
 		detail := r.Reason
 		if r.Status == migrate.StatusMigrated {
 			detail = fmt.Sprintf("-> %s (%s)", r.Target, r.Took.Round(100_000_000))
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\n", r.Status, r.Source, detail)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", label, r.Status, r.Source, visibility, detail)
 	}
 	_ = w.Flush()
 
@@ -460,6 +505,53 @@ func printResults(results []migrate.Result) {
 		counts[migrate.StatusMigrated], counts[migrate.StatusExists],
 		counts[migrate.StatusSkipped], counts[migrate.StatusFailed],
 		counts[migrate.StatusPlanned])
+}
+
+// plannedIndices returns the positions of the rows that will actually be
+// created, in the order printResults numbers them. Sharing the order is what
+// makes the numbers the user types line up with the rows they read.
+func plannedIndices(results []migrate.Result) []int {
+	var indices []int
+	for i, r := range results {
+		if r.Status == migrate.StatusPlanned {
+			indices = append(indices, i)
+		}
+	}
+	return indices
+}
+
+// askVisibilityFlips offers to invert the visibility of individual
+// repositories and returns the overrides, keyed by Gitea full name.
+//
+// Framed as "change these" rather than "choose for each" so that the default --
+// pressing Enter -- leaves every repository exactly as it is on Gitea. A
+// question that has to be answered for thirty repositories would be answered
+// carelessly.
+func askVisibilityFlips(prompt *ui.Prompter, plan []migrate.Result, pending []int) map[string]bool {
+	fmt.Println("The repositories above will be created with the visibility shown.")
+	chosen := prompt.Select(
+		"To flip any, enter its number(s) separated by spaces [Enter to keep them as they are]:",
+		len(pending))
+	if len(chosen) == 0 {
+		return nil
+	}
+
+	overrides := make(map[string]bool, len(chosen))
+	for _, c := range chosen {
+		row := plan[pending[c]]
+		flipped := !row.Private
+		overrides[row.Source] = flipped
+		fmt.Printf("  %s  %s -> %s\n", row.Source, visibilityWord(row.Private), visibilityWord(flipped))
+	}
+	return overrides
+}
+
+// visibilityWord renders a visibility boolean the way GitHub labels it.
+func visibilityWord(private bool) string {
+	if private {
+		return "private"
+	}
+	return "public"
 }
 
 // countStatus tallies one outcome across a result set.

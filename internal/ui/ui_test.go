@@ -91,3 +91,64 @@ func TestLineFallsBackToDefault(t *testing.T) {
 		t.Errorf("Line = %q, want the typed answer", got)
 	}
 }
+
+func TestParseSelection(t *testing.T) {
+	cases := []struct {
+		input   string
+		count   int
+		want    []int
+		wantErr bool
+	}{
+		{"1 3", 5, []int{0, 2}, false},
+		{"1,3", 5, []int{0, 2}, false},   // commas are accepted too
+		{"  2  ", 5, []int{1}, false},    // stray whitespace
+		{"", 5, nil, false},              // nothing selected
+		{"3 1 3", 5, []int{2, 0}, false}, // a repeat is a typo, not two actions
+		{"0", 5, nil, true},              // the list is 1-based
+		{"6", 5, nil, true},              // past the end
+		{"-1", 5, nil, true},
+		{"x", 5, nil, true},
+		// One bad entry rejects the whole line: acting on part of a selection
+		// means acting on a set the user never chose.
+		{"1 9", 5, nil, true},
+	}
+	for _, c := range cases {
+		got, err := ParseSelection(c.input, c.count)
+		if (err != nil) != c.wantErr {
+			t.Errorf("ParseSelection(%q): err = %v, wantErr %v", c.input, err, c.wantErr)
+			continue
+		}
+		if err != nil {
+			continue
+		}
+		if len(got) != len(c.want) {
+			t.Errorf("ParseSelection(%q) = %v, want %v", c.input, got, c.want)
+			continue
+		}
+		for i := range c.want {
+			if got[i] != c.want[i] {
+				t.Errorf("ParseSelection(%q) = %v, want %v", c.input, got, c.want)
+				break
+			}
+		}
+	}
+}
+
+func TestSelectRetriesOnBadInput(t *testing.T) {
+	var out strings.Builder
+	p := NewWith(strings.NewReader("9\n2\n"), &out, true)
+	got := p.Select("which?", 3)
+	if len(got) != 1 || got[0] != 1 {
+		t.Errorf("Select = %v, want [1] after the out-of-range answer was rejected", got)
+	}
+	if !strings.Contains(out.String(), "not between 1 and 3") {
+		t.Errorf("no explanation shown for the rejected answer:\n%s", out.String())
+	}
+}
+
+func TestSelectEmptyAnswerChangesNothing(t *testing.T) {
+	p := NewWith(strings.NewReader("\n"), &strings.Builder{}, true)
+	if got := p.Select("which?", 3); got != nil {
+		t.Errorf("Select = %v, want nil for a bare enter", got)
+	}
+}
