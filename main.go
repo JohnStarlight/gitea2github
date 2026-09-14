@@ -330,9 +330,27 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	// --yes, which means "do not ask me anything".
 	if prompt.Interactive() && !*dryRun && !*assumeYes {
 		fmt.Println()
-		if !given["collaborations"] {
-			*collabs = prompt.Confirm("Include repositories owned by other people (group projects)?", false)
+
+		// The three exclusions are only worth asking about when the account
+		// actually contains something they would exclude. Asking "include
+		// forks?" of someone who has none is noise, and noise is what trains
+		// people to stop reading prompts.
+		if n := countMatching(repos, func(r gitea.Repo) bool {
+			return !r.OwnedBy(giteaCred.Username)
+		}); n > 0 && !given["collaborations"] {
+			*collabs = prompt.Confirm(fmt.Sprintf(
+				"Include %d repositor%s owned by other people (group projects)?",
+				n, plural(n, "y", "ies")), false)
 		}
+		if n := countMatching(repos, func(r gitea.Repo) bool { return r.Fork }); n > 0 && !given["forks"] {
+			*forks = prompt.Confirm(fmt.Sprintf(
+				"Include %d fork%s?", n, plural(n, "", "s")), false)
+		}
+		if n := countMatching(repos, func(r gitea.Repo) bool { return r.Archived }); n > 0 && !given["archived"] {
+			*archived = prompt.Confirm(fmt.Sprintf(
+				"Include %d archived repositor%s?", n, plural(n, "y", "ies")), false)
+		}
+
 		if !given["redact-emails"] {
 			*redactEmails = prompt.Confirm("Replace email addresses in the commit history?", *collabs)
 		}
@@ -449,6 +467,20 @@ func countStatus(results []migrate.Result, status migrate.Status) int {
 	n := 0
 	for _, r := range results {
 		if r.Status == status {
+			n++
+		}
+	}
+	return n
+}
+
+// countMatching counts the repositories satisfying pred, ignoring empty ones.
+//
+// Empty repositories can never be migrated whatever the user answers, so
+// including them would inflate a count that exists to help someone decide.
+func countMatching(repos []gitea.Repo, pred func(gitea.Repo) bool) int {
+	n := 0
+	for _, r := range repos {
+		if !r.Empty && pred(r) {
 			n++
 		}
 	}

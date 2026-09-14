@@ -126,7 +126,8 @@ gitea2github migrate      # asks, shows the plan, then asks again before doing i
 A session:
 
 ```
-Include repositories owned by other people (group projects)? [y/N] n
+Include 3 repositories owned by other people (group projects)? [y/N] n
+Include 2 forks? [y/N] n
 Replace email addresses in the commit history? [y/N] y
   Your own address, to keep linked to GitHub (blank for none): [me@example.com]
 Create the GitHub repositories private? [y/N] n
@@ -141,8 +142,10 @@ skipped  ppetraki/ascii-art-color  owned by ppetraki (use --collaborations to in
 Migrate 1 repository to github.com/JohnStarlight? [y/N]
 ```
 
-Any flag you pass answers that question in advance, so `migrate --private` asks
-about everything except visibility.
+Questions about exclusions appear only when the account actually contains
+something to exclude — no "include forks?" if you have none. Any flag you pass
+answers its question in advance, so `migrate --private` asks about everything
+except visibility.
 
 ```sh
 gitea2github list                                    # what can it see?
