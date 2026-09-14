@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"sort"
 	"strings"
@@ -35,6 +36,7 @@ import (
 	"github.com/JohnStarlight/gitea2github/internal/migrate"
 	"github.com/JohnStarlight/gitea2github/internal/redact"
 	"github.com/JohnStarlight/gitea2github/internal/relink"
+	"github.com/JohnStarlight/gitea2github/internal/ui"
 )
 
 // defaultGiteaURL points at the Zone01 Greece instance, which is the audience
@@ -84,8 +86,14 @@ func usage() {
 Commands:
   doctor    Check that both credentials resolve and have the scopes needed
   list      List the Gitea repositories that would be considered
-  migrate   Mirror repositories to GitHub (use --dry-run first)
-  relink    Repoint local clones from Gitea to GitHub
+  migrate   Mirror repositories to GitHub
+  relink    Repoint local clones from Gitea to GitHub (takes a directory)
+
+migrate and relink never change anything without showing you the plan first and
+asking. Run them with no flags and they will ask what you want.
+
+  --dry-run   print the plan and stop, asking nothing
+  --yes       skip the questions and the confirmation (required without a terminal)
 
 Run "gitea2github <command> -h" for the flags of each command.
 
@@ -261,7 +269,8 @@ func cmdList(ctx context.Context, args []string) error {
 func cmdMigrate(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("migrate", flag.ExitOnError)
 	giteaURL := giteaFlags(fs)
-	dryRun := fs.Bool("dry-run", false, "resolve and filter everything, but change nothing")
+	dryRun := fs.Bool("dry-run", false, "print the plan and stop, without asking anything")
+	assumeYes := fs.Bool("yes", false, "skip the questions and the confirmation, using flags and defaults")
 	collabs := fs.Bool("collaborations", false, "also migrate repositories owned by other Gitea users")
 	forks := fs.Bool("forks", false, "also migrate forks")
 	archived := fs.Bool("archived", false, "also migrate archived repositories")
@@ -278,6 +287,14 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	if len(keepEmails) > 0 && !*redactEmails {
 		return fmt.Errorf("--keep-email has no effect without --redact-emails")
 	}
+
+	// Which flags the user actually typed. Anything they set explicitly is
+	// their decision and must not be second-guessed by a question; anything
+	// they left alone is fair game to ask about.
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
+
+	prompt := ui.New()
 
 	client, giteaCred, err := resolveGitea(*giteaURL)
 	if err != nil {
@@ -306,19 +323,27 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	}
 	sort.Slice(repos, func(i, j int) bool { return repos[i].FullName < repos[j].FullName })
 
-	fmt.Printf("%s -> github.com/%s  (%d repositories considered)\n\n",
-		*giteaURL, ghLogin, len(repos))
-	if *dryRun {
-		fmt.Println("DRY RUN - nothing will be created or pushed")
-	}
+	fmt.Printf("%s -> github.com/%s  (%d repositories visible)\n", *giteaURL, ghLogin, len(repos))
 
-	// Workers log concurrently, so serialise writes to stdout. Without this the
-	// progress lines interleave mid-word.
-	var logMu sync.Mutex
-	logf := func(format string, args ...any) {
-		logMu.Lock()
-		defer logMu.Unlock()
-		fmt.Printf("  "+format+"\n", args...)
+	// Ask about anything not already decided on the command line. Skipped
+	// entirely for --dry-run, which is a preview of the defaults, and for
+	// --yes, which means "do not ask me anything".
+	if prompt.Interactive() && !*dryRun && !*assumeYes {
+		fmt.Println()
+		if !given["collaborations"] {
+			*collabs = prompt.Confirm("Include repositories owned by other people (group projects)?", false)
+		}
+		if !given["redact-emails"] {
+			*redactEmails = prompt.Confirm("Replace email addresses in the commit history?", *collabs)
+		}
+		if *redactEmails && !given["keep-email"] {
+			if own := prompt.Line("  Your own address, to keep linked to GitHub (blank for none):", gitUserEmail()); own != "" {
+				keepEmails = append(keepEmails, own)
+			}
+		}
+		if !given["private"] {
+			*private = prompt.Confirm("Create the GitHub repositories private?", false)
+		}
 	}
 
 	// A single Mapper is shared by every worker so that one person is redacted
@@ -326,10 +351,9 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	var mapper *redact.Mapper
 	if *redactEmails {
 		mapper = redact.NewMapper(*redactDomain, keepEmails)
-		fmt.Printf("Redacting email addresses; %d address(es) kept as-is\n", len(keepEmails))
 	}
 
-	results := migrate.Run(ctx, repos, migrate.Options{
+	options := migrate.Options{
 		GiteaUser:             giteaCred.Username,
 		GiteaToken:            giteaCred.Token,
 		GitHubUser:            ghLogin,
@@ -338,21 +362,68 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		IncludeForks:          *forks,
 		IncludeArchived:       *archived,
 		ForcePrivate:          *private,
-		DryRun:                *dryRun,
 		Concurrency:           *concurrency,
 		Mapper:                mapper,
-		Log:                   logf,
-	})
-
-	if mapper != nil {
-		fmt.Printf("\n%d distinct email address(es) replaced\n", mapper.Count())
 	}
-	return printSummary(results)
+
+	// Work out the plan by running the whole pipeline in dry-run mode. Deriving
+	// it from the same code that will execute it is what makes the preview
+	// trustworthy: there is no second implementation to drift out of step.
+	fmt.Println("\nWorking out what would change...")
+	planOptions := options
+	planOptions.DryRun = true
+	plan := migrate.Run(ctx, repos, planOptions)
+	printResults(plan)
+
+	if *dryRun {
+		return nil
+	}
+
+	pending := countStatus(plan, migrate.StatusPlanned)
+	if pending == 0 {
+		fmt.Println("Nothing to do.")
+		return nil
+	}
+
+	// The point of no return. Everything above this line is read-only.
+	if !*assumeYes {
+		if !prompt.Interactive() {
+			return fmt.Errorf("refusing to change anything without a terminal to confirm on; "+
+				"pass --yes to proceed or --dry-run to preview (%d repositories would be migrated)", pending)
+		}
+		question := fmt.Sprintf("\nMigrate %d repositor%s to github.com/%s?",
+			pending, plural(pending, "y", "ies"), ghLogin)
+		if !prompt.Confirm(question, false) {
+			fmt.Println("Cancelled; nothing was changed.")
+			return nil
+		}
+	}
+
+	// Workers log concurrently, so serialise writes to stdout. Without this the
+	// progress lines interleave mid-word.
+	var logMu sync.Mutex
+	options.Log = func(format string, args ...any) {
+		logMu.Lock()
+		defer logMu.Unlock()
+		fmt.Printf("  "+format+"\n", args...)
+	}
+
+	fmt.Println()
+	results := migrate.Run(ctx, repos, options)
+	printResults(results)
+	if mapper != nil {
+		fmt.Printf("%d distinct email address(es) replaced\n", mapper.Count())
+	}
+	if failed := countStatus(results, migrate.StatusFailed); failed > 0 {
+		return fmt.Errorf("%d repositories failed to migrate", failed)
+	}
+	return nil
 }
 
-// printSummary renders the per-repository outcome table and returns a non-nil
-// error if anything failed, so the process exit code reflects the run.
-func printSummary(results []migrate.Result) error {
+// printResults renders the per-repository outcome table and the tally beneath
+// it. It deliberately returns nothing: the same renderer prints the plan and
+// the outcome, and a plan is not a failure even when it contains problems.
+func printResults(results []migrate.Result) {
 	fmt.Println()
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "STATUS\tREPOSITORY\tDETAIL")
@@ -365,26 +436,51 @@ func printSummary(results []migrate.Result) error {
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\n", r.Status, r.Source, detail)
 	}
-	if err := w.Flush(); err != nil {
-		return err
-	}
+	_ = w.Flush()
 
-	fmt.Printf("\n%d migrated, %d already present, %d skipped, %d failed, %d planned\n",
+	fmt.Printf("\n%d migrated, %d already present, %d skipped, %d failed, %d to do\n\n",
 		counts[migrate.StatusMigrated], counts[migrate.StatusExists],
 		counts[migrate.StatusSkipped], counts[migrate.StatusFailed],
 		counts[migrate.StatusPlanned])
+}
 
-	if counts[migrate.StatusFailed] > 0 {
-		return fmt.Errorf("%d repositories failed to migrate", counts[migrate.StatusFailed])
+// countStatus tallies one outcome across a result set.
+func countStatus(results []migrate.Result, status migrate.Status) int {
+	n := 0
+	for _, r := range results {
+		if r.Status == status {
+			n++
+		}
 	}
-	return nil
+	return n
+}
+
+// plural picks a word form, so counts read as sentences rather than as
+// "1 repositor(y/ies)".
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
+// gitUserEmail returns the address git is configured to commit with, used as
+// the suggested answer when asking which address to keep unredacted. It is the
+// address the user's own commits almost certainly carry.
+func gitUserEmail() string {
+	out, err := exec.Command("git", "config", "--get", "user.email").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // cmdRelink repoints local working copies at GitHub.
 func cmdRelink(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("relink", flag.ExitOnError)
 	giteaURL := giteaFlags(fs)
-	dryRun := fs.Bool("dry-run", false, "report what would change without touching anything")
+	dryRun := fs.Bool("dry-run", false, "print the plan and stop, without asking anything")
+	assumeYes := fs.Bool("yes", false, "skip the questions and the confirmation, using flags and defaults")
 	oldName := fs.String("keep-as", "gitea", "name to give the existing Gitea remote (--push-to=github only)")
 	verify := fs.Bool("verify", true, "confirm the GitHub repository exists before repointing")
 	pushTo := fs.String("push-to", relink.ModeGitHub,
@@ -398,9 +494,17 @@ func cmdRelink(ctx context.Context, args []string) error {
 		return fmt.Errorf("--push-to must be one of: %s, %s, %s (got %q)",
 			relink.ModeGitHub, relink.ModeBoth, relink.ModeGitea, *pushTo)
 	}
+
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
+	prompt := ui.New()
+
 	root := fs.Arg(0)
 	if root == "" {
-		return fmt.Errorf("usage: gitea2github relink [flags] <directory>")
+		if !prompt.Interactive() {
+			return fmt.Errorf("usage: gitea2github relink [flags] <directory>")
+		}
+		root = prompt.Line("Which directory holds your clones?", ".")
 	}
 
 	parsed, err := url.Parse(*giteaURL)
@@ -417,27 +521,86 @@ func cmdRelink(ctx context.Context, args []string) error {
 		return fmt.Errorf("identifying GitHub user: %w", err)
 	}
 
-	results, err := relink.Run(ctx, relink.Options{
+	// Where a clone should push is the one decision here with consequences, so
+	// ask it outright rather than letting the default decide silently.
+	if prompt.Interactive() && !*dryRun && !*assumeYes && !given["push-to"] {
+		modes := []string{relink.ModeGitHub, relink.ModeBoth, relink.ModeGitea}
+		choice := prompt.Choose("\nWhere should these clones push?", []ui.Option{
+			{Label: "github", Help: "GitHub only; the Gitea remote is kept as \"" + *oldName + "\""},
+			{Label: "both", Help: "one git push reaches both servers"},
+			{Label: "gitea", Help: "Gitea only; just add a github remote"},
+		}, 0)
+		*pushTo = modes[choice]
+	}
+
+	options := relink.Options{
 		Root:          root,
 		GiteaHost:     parsed.Host,
 		GitHubUser:    ghLogin,
 		GitHubTok:     ghCred.Token,
 		OldRemoteName: *oldName,
 		Mode:          *pushTo,
-		DryRun:        *dryRun,
 		Verify:        *verify,
-		Log:           func(format string, args ...any) { fmt.Printf("  "+format+"\n", args...) },
-	})
+	}
+
+	planOptions := options
+	planOptions.DryRun = true
+	fmt.Println("\nWorking out what would change...")
+	plan, err := relink.Run(ctx, planOptions)
 	if err != nil {
 		return err
 	}
+	printRelinkResults(plan)
 
+	if *dryRun {
+		return nil
+	}
+
+	pending := 0
+	for _, r := range plan {
+		if r.Action == "planned" {
+			pending++
+		}
+	}
+	if pending == 0 {
+		fmt.Println("Nothing to do.")
+		return nil
+	}
+
+	if !*assumeYes {
+		if !prompt.Interactive() {
+			return fmt.Errorf("refusing to change anything without a terminal to confirm on; "+
+				"pass --yes to proceed or --dry-run to preview (%d clone(s) would be repointed)", pending)
+		}
+		question := fmt.Sprintf("\nRepoint %d clone%s (push mode: %s)?",
+			pending, plural(pending, "", "s"), *pushTo)
+		if !prompt.Confirm(question, false) {
+			fmt.Println("Cancelled; nothing was changed.")
+			return nil
+		}
+	}
+
+	options.Log = func(format string, args ...any) { fmt.Printf("  "+format+"\n", args...) }
+	fmt.Println()
+	results, err := relink.Run(ctx, options)
+	if err != nil {
+		return err
+	}
+	printRelinkResults(results)
+	return nil
+}
+
+// printRelinkResults renders the relink table, used for both the plan and the
+// outcome.
+func printRelinkResults(results []relink.Result) {
+	fmt.Println()
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "ACTION\tPATH\tGITHUB\tDETAIL")
 	for _, r := range results {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.Action, r.Path, r.NewURL, r.Reason)
 	}
-	return w.Flush()
+	_ = w.Flush()
+	fmt.Println()
 }
 
 // filterByName keeps only the repositories whose name matches one of the given
