@@ -155,3 +155,60 @@ func (p *Prompter) readLine() (string, error) {
 	}
 	return strings.TrimSpace(line), nil
 }
+
+// ParseSelection turns a line like "1 3 5" into zero-based indices into a list
+// of count items.
+//
+// Commas are accepted alongside spaces because people type both, and a
+// selection is rejected whole rather than partially applied: silently ignoring
+// the one number that was out of range would act on a set the user never
+// chose.
+func ParseSelection(input string, count int) ([]int, error) {
+	fields := strings.FieldsFunc(input, func(r rune) bool {
+		return r == ' ' || r == ',' || r == '\t'
+	})
+
+	seen := map[int]bool{}
+	var indices []int
+	for _, field := range fields {
+		n, err := strconv.Atoi(field)
+		if err != nil {
+			return nil, fmt.Errorf("%q is not a number", field)
+		}
+		if n < 1 || n > count {
+			return nil, fmt.Errorf("%d is not between 1 and %d", n, count)
+		}
+		// Listing the same number twice is a typo, not a request to act twice.
+		if !seen[n] {
+			seen[n] = true
+			indices = append(indices, n-1)
+		}
+	}
+	return indices, nil
+}
+
+// Select asks for a list of numbers and returns the chosen zero-based indices.
+// An empty answer selects nothing, which is how "leave everything as it is"
+// stays the path of least resistance.
+func (p *Prompter) Select(question string, count int) []int {
+	if !p.interactive || count == 0 {
+		return nil
+	}
+	for {
+		fmt.Fprintf(p.out, "%s ", question)
+		answer, err := p.readLine()
+		if err != nil {
+			fmt.Fprintln(p.out)
+			return nil
+		}
+		if answer == "" {
+			return nil
+		}
+		indices, parseErr := ParseSelection(answer, count)
+		if parseErr != nil {
+			fmt.Fprintf(p.out, "  %v; try again, or press Enter to change nothing\n", parseErr)
+			continue
+		}
+		return indices
+	}
+}
