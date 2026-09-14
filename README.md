@@ -145,12 +145,28 @@ one at `<your-gitea>/user/settings/applications`.
 | --- | --- | --- |
 | `doctor` | — | Checks both credentials and their scopes, and says which half is broken |
 | `list` | — | Lists the Gitea repositories it can see, and how each one is classified |
-| `migrate` | — | Mirrors repositories to GitHub. Run it with `--dry-run` first |
+| `migrate` | — | Mirrors repositories to GitHub |
 | `relink` | a **directory** | Repoints the local clones under that directory away from Gitea |
 
-Every command takes `--gitea-url` (default `https://platform.zone01.gr/git`), and
-`migrate` and `relink` both take `--dry-run`. The full list is under
-[Flags](#flags); worked examples are in [Examples](#examples).
+**`migrate` and `relink` never change anything without showing you the plan and
+asking.** Run either with no flags at all and it will ask what you want, print
+exactly what it is about to do, and wait for a yes. Nothing is created, pushed or
+repointed before that.
+
+Every command takes `--gitea-url` (default `https://platform.zone01.gr/git`). The
+full list is under [Flags](#flags); worked examples are in
+[Examples](#examples).
+
+### Running it without a terminal
+
+Prompts are skipped when stdin is not a terminal, so scripts and CI never hang
+waiting for an answer nobody is there to give. In that situation a run that would
+change something refuses to proceed and tells you which flag you want:
+
+| You want | Use |
+| --- | --- |
+| A preview, changing nothing | `--dry-run` — prints the plan and stops, asking nothing |
+| To go ahead unattended | `--yes` — skips the questions and the confirmation |
 
 `doctor` tells you precisely which half of the chain is broken:
 
@@ -164,14 +180,37 @@ Gitea
 
 ## Examples
 
-**Always start here.** Nothing below `doctor` touches anything until you drop
-`--dry-run`:
+**The short version.** `migrate` asks what you want, shows the plan and waits for
+a yes, so this is safe to run and read:
 
 ```sh
-gitea2github doctor                 # do my credentials work, and do they have the right scopes?
-gitea2github list                   # what can it see, and how does it classify each one?
-gitea2github migrate --dry-run      # what exactly would happen, repo by repo?
+gitea2github doctor       # do my credentials work, and do they have the right scopes?
+gitea2github migrate      # asks, shows the plan, then asks again before doing it
 ```
+
+A session looks like this:
+
+```
+Include repositories owned by other people (group projects)? [y/N] n
+Replace email addresses in the commit history? [y/N] y
+  Your own address, to keep linked to GitHub (blank for none): [me@example.com]
+Create the GitHub repositories private? [y/N] n
+
+Working out what would change...
+
+STATUS   REPOSITORY                   DETAIL
+planned  JohnStarlight/linear-stats        would clone, redact emails, create and push
+exists   JohnStarlight/go-reloaded         already on GitHub, left untouched
+skipped  someone-else/ascii-art-color     owned by someone-else (use --collaborations to include)
+
+1 migrated, 1 already present, 1 skipped, 0 failed, 1 to do
+
+Migrate 1 repository to github.com/JohnStarlight? [y/N]
+```
+
+Answering anything but yes leaves everything untouched. Passing a flag answers
+that question in advance, so `migrate --private` asks about the rest but not
+about visibility.
 
 **Migrate everything you own.** Group projects, forks and archived repositories
 are left alone — see [What gets skipped](#what-gets-skipped-and-why):
@@ -330,7 +369,8 @@ Common to every command:
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--dry-run` | `false` | Resolve and filter everything, change nothing |
+| `--dry-run` | `false` | Print the plan and stop, asking nothing |
+| `--yes` | `false` | Skip the questions and the confirmation |
 | `--only` | all | Comma-separated repository names |
 | `--collaborations` | `false` | Also migrate repositories owned by other Gitea users |
 | `--forks` | `false` | Also migrate forks |
@@ -345,7 +385,8 @@ Common to every command:
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--dry-run` | `false` | Report without changing |
+| `--dry-run` | `false` | Print the plan and stop, asking nothing |
+| `--yes` | `false` | Skip the questions and the confirmation |
 | `--push-to` | `github` | Where clones push: `github`, `both`, or `gitea` |
 | `--keep-as` | `gitea` | New name for the old remote (`--push-to=github` only) |
 | `--verify` | `true` | Confirm the GitHub repo exists first |
@@ -362,6 +403,13 @@ Common to every command:
 
 ## Safety properties
 
+- **Nothing changes without a confirmation.** `migrate` and `relink` work out the
+  plan, print it and ask. The plan is produced by running the real pipeline in
+  dry-run mode, not by a separate code path, so the preview cannot drift out of
+  step with what actually happens.
+- **No prompt is ever mandatory.** Without a terminal, questions return their
+  defaults instead of blocking, and a run that would change something stops and
+  names `--yes` and `--dry-run` rather than proceeding unasked.
 - **Idempotent.** A repository already on GitHub is reported as `exists` and left
   untouched, so an interrupted run is simply re-run.
 - **Nothing is deleted.** `relink` *renames* the Gitea remote to `gitea` rather
