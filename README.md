@@ -33,8 +33,9 @@ first. Beyond that:
   archived ones are [left alone](#what-gets-skipped-and-why) unless you ask.
 - **An interrupted run is just re-run.** Anything already on GitHub is reported
   as `exists` and left untouched.
-- **Everything lands private by default**, and descriptions come along instead
-  of being retyped.
+- **Visibility is never widened by accident.** Repositories are created exactly
+  as they are on Gitea unless you say otherwise, one by one. Descriptions come
+  along too, instead of being retyped.
 - **Your clones get repointed** — including [pushing to both
   servers](#flags) if you are not done with Gitea.
 - **Thirty repositories are one command**, run in parallel, with a summary.
@@ -131,29 +132,36 @@ Include 3 repositories owned by other people (group projects)? [y/N] n
 Include 2 forks? [y/N] n
 Replace email addresses in the commit history? [y/N] y
   Your own address, to keep linked to GitHub (blank for none): [me@example.com]
-Create the GitHub repositories public? [y/N] n
 
 Working out what would change...
 
-STATUS   REPOSITORY                DETAIL
-planned  JohnStarlight/linear-stats     would clone, redact emails, create and push
-exists   JohnStarlight/go-reloaded      already on GitHub, left untouched
-skipped  someone-else/ascii-art-color  owned by someone-else (use --collaborations to include)
+  #  STATUS   REPOSITORY                VISIBILITY  DETAIL
+  1  planned  JohnStarlight/linear-stats     private     would clone, redact emails, create and push
+  2  planned  JohnStarlight/math-skills      private     would clone, redact emails, create and push
+     exists   JohnStarlight/go-reloaded                  already on GitHub, left untouched
+     skipped  someone-else/ascii-art-color              owned by someone-else (use --collaborations to include)
 
-Migrate 1 repository to github.com/JohnStarlight? [y/N]
+The repositories above will be created with the visibility shown.
+To flip any, enter its number(s) separated by spaces [Enter to keep them as they are]: 2
+  JohnStarlight/math-skills  private -> public
+
+Migrate 2 repositories to github.com/JohnStarlight? [y/N]
 ```
 
 Questions about exclusions appear only when the account actually contains
 something to exclude — no "include forks?" if you have none. Any flag you pass
-answers its question in advance, so `migrate --public` asks about everything
-except visibility.
+answers its question in advance.
+
+**Visibility mirrors Gitea unless you change it.** Each repository being created
+is numbered, with the visibility it will get; typing its number flips it. Doing
+nothing changes nothing, in either direction.
 
 ```sh
 gitea2github list                                    # what can it see?
 gitea2github migrate --dry-run                       # plan only, no questions
 gitea2github migrate --only linear-stats             # one repository
 gitea2github migrate --only linear-stats,go-reloaded  # or several
-gitea2github migrate --public --yes                  # unattended, keep Gitea visibility
+gitea2github migrate --visibility=private --yes       # unattended, force all private
 gitea2github migrate --jobs 1                        # slower, kinder to rate limits
 gitea2github migrate --gitea-url https://gitea.example.com
 ```
@@ -225,7 +233,7 @@ dropped. Without the flag, history transfers byte for byte.
 | `--collaborations` | `false` | Also migrate repositories owned by other Gitea users |
 | `--forks` | `false` | Also migrate forks |
 | `--archived` | `false` | Also migrate archived repositories |
-| `--public` | `false` | Carry Gitea visibility across; without it everything is private |
+| `--visibility` | `mirror` | `mirror` the Gitea setting, or force `private` / `public` |
 | `--jobs` | `4` | Repositories transferred at once |
 | `--redact-emails` | `false` | Replace every email address in the history |
 | `--keep-email` | none | Address to leave untouched (repeatable) |
@@ -259,9 +267,9 @@ dropped. Without the flag, history transfers byte for byte.
   run that would change something stops rather than proceeding unasked.
 - **Idempotent.** A repository already on GitHub is reported as `exists`, so an
   interrupted run is simply re-run.
-- **Private by default.** Repositories are created private unless you pass
-  `--public`, and even then a repository that was private on Gitea stays private:
-  carrying visibility across never widens it.
+- **Visibility is mirrored, not guessed.** A repository is created exactly as
+  private or public as it is on Gitea unless you change it deliberately, per
+  repository, from the numbered plan in front of you.
 - **Nothing is deleted.** `relink` renames the Gitea remote rather than removing
   it, so `git push gitea` still works.
 - **Secrets never reach the logs.** Tokens are injected into clone URLs at exec

@@ -42,9 +42,15 @@ const (
 type Result struct {
 	Source string // Gitea full name, e.g. "JohnStarlight/linear-stats"
 	Target string // GitHub full name, e.g. "JohnStarlight/linear-stats"
-	Status Status
-	Reason string        // why it was skipped, or what failed
-	Took   time.Duration // wall-clock time, useful for spotting the slow ones
+
+	// SourcePrivate and Private are the visibility on Gitea and the visibility
+	// the destination would be created with. Both are reported so a plan can
+	// show what is about to change rather than only the outcome.
+	SourcePrivate bool
+	Private       bool
+	Status        Status
+	Reason        string        // why it was skipped, or what failed
+	Took          time.Duration // wall-clock time, useful for spotting the slow ones
 }
 
 // Options configures one migration run.
@@ -65,16 +71,17 @@ type Options struct {
 	IncludeForks    bool
 	IncludeArchived bool
 
-	// AllowPublic carries the source repository's visibility across instead of
-	// making every destination private.
-	//
-	// The polarity is deliberate. A zero-valued Options publishes nothing, so
-	// the failure mode of forgetting to set this field is a repository that is
-	// too private rather than one that is too public. Note that it only ever
-	// grants what the source already had: a private Gitea repository stays
-	// private either way, because carrying visibility across must never mean
-	// exposing something that was not exposed before.
-	AllowPublic bool
+	// Visibility decides what the destination repositories are created as.
+	// The zero value mirrors the source, which is the only default that never
+	// changes anyone's exposure: whatever was private on Gitea stays private,
+	// whatever was public stays public.
+	Visibility VisibilityMode
+
+	// VisibilityOverride sets the visibility of individual repositories,
+	// keyed by Gitea full name, and wins over Visibility. It is how the
+	// interactive flow records "this one, the other way round" without
+	// forcing a single choice onto the whole run.
+	VisibilityOverride map[string]bool
 
 	// DryRun resolves and filters everything but performs no clone, no
 	// creation and no push. Always the right first invocation.
@@ -176,6 +183,11 @@ func migrateOne(ctx context.Context, repo gitea.Repo, gh *github.Client, opts Op
 	res := Result{
 		Source: repo.FullName,
 		Target: opts.GitHubUser + "/" + target,
+		// Decided up front rather than at creation time so that a dry run
+		// reports the same visibility the real run would use. A plan that
+		// omitted this could not be the thing the user chooses from.
+		SourcePrivate: repo.Private,
+		Private:       destinationIsPrivate(repo, opts.Visibility, opts.VisibilityOverride),
 	}
 	finish := func(status Status, reason string) Result {
 		res.Status = status
@@ -251,9 +263,8 @@ func migrateOne(ctx context.Context, repo gitea.Repo, gh *github.Client, opts Op
 	}
 
 	// --- Create on GitHub --------------------------------------------------
-	private := destinationIsPrivate(repo, opts.AllowPublic)
 	opts.Log("creating github.com/%s/%s", opts.GitHubUser, target)
-	created, err := gh.CreateRepo(ctx, target, repo.Description, private)
+	created, err := gh.CreateRepo(ctx, target, repo.Description, res.Private)
 	if err != nil {
 		return finish(StatusFailed, fmt.Sprintf("creating GitHub repo: %v", err))
 	}
@@ -407,14 +418,40 @@ func rewriteHistory(ctx context.Context, src, dst string, m *redact.Mapper) erro
 	return nil
 }
 
+// VisibilityMode is the blanket rule applied to repositories with no
+// individual override.
+type VisibilityMode string
+
+const (
+	// VisibilityMirror creates each repository as it is on Gitea. It is the
+	// zero value because it is the only setting that cannot change how exposed
+	// anything is.
+	VisibilityMirror VisibilityMode = ""
+
+	// VisibilityPrivate and VisibilityPublic force every repository one way,
+	// for unattended runs where nobody is there to choose per repository.
+	VisibilityPrivate VisibilityMode = "private"
+	VisibilityPublic  VisibilityMode = "public"
+)
+
 // destinationIsPrivate decides the visibility of the repository about to be
 // created on GitHub.
 //
-// Pulled out of the migration path purely so the polarity can be tested. It is
-// one boolean expression, but getting it backwards would publish private work,
-// which is not a mistake worth discovering in production.
-func destinationIsPrivate(source gitea.Repo, allowPublic bool) bool {
-	// A source that is private stays private no matter what: allowing public
-	// destinations means carrying visibility across, never widening it.
-	return source.Private || !allowPublic
+// Pulled out of the migration path so the precedence can be tested. Getting it
+// backwards would publish private work, which is not a mistake worth
+// discovering in production.
+func destinationIsPrivate(source gitea.Repo, mode VisibilityMode, override map[string]bool) bool {
+	// An explicit per-repository choice is the most specific thing the user
+	// said, so it beats the blanket rule.
+	if private, ok := override[source.FullName]; ok {
+		return private
+	}
+	switch mode {
+	case VisibilityPrivate:
+		return true
+	case VisibilityPublic:
+		return false
+	default:
+		return source.Private
+	}
 }
