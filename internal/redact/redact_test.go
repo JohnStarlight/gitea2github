@@ -11,8 +11,8 @@ import (
 // scheme promises: the same person always gets the same replacement, and two
 // different people never collide into one identity.
 func TestRedactedIsStableAndDistinct(t *testing.T) {
-	a := NewMapper(nil)
-	b := NewMapper(nil)
+	a := NewMapper(nil, "")
+	b := NewMapper(nil, "")
 
 	first := a.Redacted("alice@example.com")
 	if again := a.Redacted("alice@example.com"); again != first {
@@ -37,7 +37,7 @@ func TestRedactedIsStableAndDistinct(t *testing.T) {
 // TestKeepList checks that your own address survives, which is what keeps your
 // commits linked to your GitHub profile.
 func TestKeepList(t *testing.T) {
-	m := NewMapper([]string{"Me@Example.com"})
+	m := NewMapper([]string{"Me@Example.com"}, "")
 	if got := m.Redacted("me@example.com"); got != "me@example.com" {
 		t.Errorf("kept address was redacted to %q", got)
 	}
@@ -64,7 +64,7 @@ func TestFilterStreamRewritesIdentitiesAndMessages(t *testing.T) {
 	in.WriteString("data " + strconv.Itoa(len(message)) + "\n" + message)
 	in.WriteString("M 100644 :1 file.txt\n\ndone\n")
 
-	m := NewMapper(nil)
+	m := NewMapper(nil, "")
 	var out bytes.Buffer
 	if err := FilterStream(&in, &out, m); err != nil {
 		t.Fatalf("FilterStream: %v", err)
@@ -114,7 +114,7 @@ func TestFilterStreamLeavesInlineContentAlone(t *testing.T) {
 	in.WriteString("\ndone\n")
 
 	var out bytes.Buffer
-	if err := FilterStream(&in, &out, NewMapper(nil)); err != nil {
+	if err := FilterStream(&in, &out, NewMapper(nil, "")); err != nil {
 		t.Fatalf("FilterStream: %v", err)
 	}
 	if !strings.Contains(out.String(), content) {
@@ -127,7 +127,7 @@ func TestFilterStreamLeavesInlineContentAlone(t *testing.T) {
 func TestFilterStreamRejectsDelimitedData(t *testing.T) {
 	in := strings.NewReader("blob\ndata <<EOF\nhello\nEOF\n")
 	var out bytes.Buffer
-	if err := FilterStream(in, &out, NewMapper(nil)); err == nil {
+	if err := FilterStream(in, &out, NewMapper(nil, "")); err == nil {
 		t.Error("expected an error for a delimited data block, got nil")
 	}
 }
@@ -141,7 +141,7 @@ func TestFilterStreamRejectsDelimitedData(t *testing.T) {
 // it. Every repository redacted before a change to this shape becomes
 // unreadable by everything after it.
 func TestTheAddressShapeIsAContract(t *testing.T) {
-	got := NewMapper(nil).Redacted("student@zone01.gr")
+	got := NewMapper(nil, "").Redacted("student@zone01.gr")
 
 	if want := "e9e3c54b5e@redacted.invalid"; got != want {
 		t.Errorf("the redacted form of a known address is %q, want %q.\n"+
@@ -185,7 +185,7 @@ func TestTheDomainCannotBeChosen(t *testing.T) {
 			"so it can never become a real mailbox)", Domain)
 	}
 	for _, addr := range []string{"a@b.com", "someone@zone01.gr", "x@y.co.uk"} {
-		if got := NewMapper(nil).Redacted(addr); !strings.HasSuffix(got, "@"+Domain) {
+		if got := NewMapper(nil, "").Redacted(addr); !strings.HasSuffix(got, "@"+Domain) {
 			t.Errorf("%s redacted to %q, which is not on the fixed domain", addr, got)
 		}
 	}
@@ -195,12 +195,83 @@ func TestTheDomainCannotBeChosen(t *testing.T) {
 // recoverable: an address that was preserved does not look like one that was
 // replaced.
 func TestKeptAddressesStayRecognisablyReal(t *testing.T) {
-	m := NewMapper([]string{"me@example.com"})
+	m := NewMapper([]string{"me@example.com"}, "")
 
 	if got := m.Redacted("me@example.com"); IsRedacted(got) {
 		t.Errorf("a kept address came back looking redacted: %q", got)
 	}
 	if got := m.Redacted("someone@zone01.gr"); !IsRedacted(got) {
 		t.Errorf("a redacted address does not look redacted: %q", got)
+	}
+}
+
+// TestYourOwnAddressesBecomeYourNoReply is the promise the keep list has
+// always made and could not previously deliver. GitHub attributes a commit to
+// an account only when its address is one that account has verified, or its
+// no-reply; an address merely left alone shows as nobody, with no avatar and
+// no link. Preserving therefore bought attribution only by publishing the real
+// address it was meant to hide.
+func TestYourOwnAddressesBecomeYourNoReply(t *testing.T) {
+	const noreply = "259051186+JohnStarlight@users.noreply.github.com"
+	m := NewMapper([]string{
+		"john.vogiakelis@gmail.com",
+		"ivogiake@noreply.platform.zone01.gr",
+	}, noreply)
+
+	for _, mine := range []string{"john.vogiakelis@gmail.com", "ivogiake@noreply.platform.zone01.gr"} {
+		got := m.Redacted(mine)
+		if got != noreply {
+			t.Errorf("%s became %q, want the no-reply address", mine, got)
+		}
+		if got == mine {
+			t.Errorf("%s was left as it was, which links to nobody on GitHub", mine)
+		}
+	}
+
+	// Everyone else still becomes a hash.
+	if got := m.Redacted("teammate@example.com"); !IsRedacted(got) {
+		t.Errorf("somebody else's address became %q, want a hash", got)
+	}
+}
+
+// TestTheReplacementKeepsItsCapitals guards what goes into every commit. The
+// lookup folds case so an address matches however it was typed, but a login
+// written back in lower case reads as a mistake.
+func TestTheReplacementKeepsItsCapitals(t *testing.T) {
+	const noreply = "259051186+JohnStarlight@users.noreply.github.com"
+	m := NewMapper([]string{"John.Vogiakelis@Gmail.com"}, noreply)
+
+	if got := m.Redacted("john.vogiakelis@gmail.com"); got != noreply {
+		t.Errorf("a differently-capitalised address gave %q, want %q", got, noreply)
+	}
+}
+
+// TestWithoutADestinationNothingIsInvented covers the fallback. When the
+// GitHub account is not known there is no address to rewrite to, and making
+// one up would attribute commits to nobody at all.
+func TestWithoutADestinationNothingIsInvented(t *testing.T) {
+	m := NewMapper([]string{"me@example.com"}, "")
+
+	if got := m.Redacted("me@example.com"); got != "me@example.com" {
+		t.Errorf("with no destination, the address became %q, want it left alone", got)
+	}
+	if got := m.Redacted("them@example.com"); !IsRedacted(got) {
+		t.Errorf("somebody else's address became %q, want a hash", got)
+	}
+}
+
+// TestOneReplacementForEveryAddressOfYours is what makes a history readable
+// afterwards: several addresses of one person collapse into one author rather
+// than into several strangers.
+func TestOneReplacementForEveryAddressOfYours(t *testing.T) {
+	const noreply = "1+me@users.noreply.github.com"
+	m := NewMapper([]string{"a@example.com", "b@example.com", "c@example.com"}, noreply)
+
+	seen := map[string]bool{}
+	for _, addr := range []string{"a@example.com", "b@example.com", "c@example.com"} {
+		seen[m.Redacted(addr)] = true
+	}
+	if len(seen) != 1 {
+		t.Errorf("three addresses of one person became %d authors: %v", len(seen), seen)
 	}
 }

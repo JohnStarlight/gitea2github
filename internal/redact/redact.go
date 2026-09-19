@@ -71,7 +71,10 @@ var emailPattern = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za
 // Mapper decides what each address becomes, and remembers its decisions so the
 // same person maps to the same replacement everywhere.
 type Mapper struct {
-	keep map[string]bool
+	// mine are the addresses belonging to whoever is running the migration,
+	// and as is the one they all become.
+	mine map[string]bool
+	as   string
 
 	// Workers migrate repositories concurrently and each one filters its own
 	// stream, so the assignment table needs a lock.
@@ -79,18 +82,30 @@ type Mapper struct {
 	assigned map[string]string
 }
 
-// NewMapper builds a Mapper. Addresses in keep are passed through untouched --
-// that is how you keep your own commits linked to your GitHub profile while
-// redacting everyone else's.
-func NewMapper(keep []string) *Mapper {
-	k := make(map[string]bool, len(keep))
-	for _, addr := range keep {
+// NewMapper builds a Mapper. Addresses in mine become as, and every other
+// address becomes a hash.
+//
+// Rewriting rather than preserving is what makes the promise work. GitHub
+// attributes a commit to an account only when its address is one that account
+// has verified, or its no-reply; an address merely left alone -- a Gitea
+// no-reply, say -- is hidden but shows as nobody, with no avatar and no link.
+// Preserving therefore bought attribution only by publishing the real address
+// it was supposed to hide.
+//
+// An empty as falls back to leaving those addresses as they are, which is all
+// that can be done when the destination account is not known.
+func NewMapper(mine []string, as string) *Mapper {
+	k := make(map[string]bool, len(mine))
+	for _, addr := range mine {
 		addr = strings.ToLower(strings.TrimSpace(addr))
 		if addr != "" {
 			k[addr] = true
 		}
 	}
-	return &Mapper{keep: k, assigned: map[string]string{}}
+	// Trimmed but not lowercased: the lookup keys are folded so that an
+	// address matches however it was typed, but the replacement is written
+	// into every commit and a mangled login reads as a mistake.
+	return &Mapper{mine: k, as: strings.TrimSpace(as), assigned: map[string]string{}}
 }
 
 // Redacted returns the replacement for one address.
@@ -103,8 +118,14 @@ func NewMapper(keep []string) *Mapper {
 // survives, which a "first.last@..." style local part would not manage.
 func (m *Mapper) Redacted(addr string) string {
 	key := strings.ToLower(strings.TrimSpace(addr))
-	if key == "" || m.keep[key] {
+	if key == "" {
 		return addr
+	}
+	if m.mine[key] {
+		if m.as == "" {
+			return addr
+		}
+		return m.as
 	}
 
 	m.mu.Lock()

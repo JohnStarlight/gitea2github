@@ -57,17 +57,44 @@ func (e *RateLimitError) Error() string {
 	return fmt.Sprintf("github rate limit hit; retry after %s", e.RetryAfter)
 }
 
+// Identity is who the token belongs to.
+type Identity struct {
+	Login string
+	ID    int64
+
+	// NoReply is the address GitHub attributes to this account without
+	// publishing anything. It is what a redacting migration rewrites the
+	// runner's own commits to: hidden, and still linked to their profile.
+	NoReply string
+}
+
 // Login returns the username of the authenticated user. The migrator needs this
 // to build destination URLs and to check for pre-existing repositories, and
 // asking GitHub is more reliable than making the user type their own username.
 func (c *Client) Login(ctx context.Context) (string, error) {
+	who, err := c.Identity(ctx)
+	return who.Login, err
+}
+
+// Identity returns the username, the numeric id and the no-reply address they
+// combine into.
+//
+// The address is derived rather than asked for, because reading it from the
+// API needs a scope the migrator has no other use for -- and because a token
+// that can create repositories already knows enough to work it out.
+func (c *Client) Identity(ctx context.Context) (Identity, error) {
 	var out struct {
 		Login string `json:"login"`
+		ID    int64  `json:"id"`
 	}
 	if err := c.do(ctx, http.MethodGet, "/user", nil, &out); err != nil {
-		return "", err
+		return Identity{}, err
 	}
-	return out.Login, nil
+	return Identity{
+		Login:   out.Login,
+		ID:      out.ID,
+		NoReply: fmt.Sprintf("%d+%s@users.noreply.github.com", out.ID, out.Login),
+	}, nil
 }
 
 // Exists reports whether owner/name is already present on GitHub.
