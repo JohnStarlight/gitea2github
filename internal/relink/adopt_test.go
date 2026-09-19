@@ -208,3 +208,69 @@ func TestUntrackedFilesAreNotAReasonToRefuse(t *testing.T) {
 		t.Errorf("an untracked file was treated as a danger: %s", risk.Reason)
 	}
 }
+
+// TestBranchWithNoUpstreamIsRefused is the case that slipped through: a branch
+// created locally often has no upstream set, and asking git how far ahead it
+// is then fails. Reading that failure as "nothing to worry about" would let an
+// operation with no way back proceed over commits nobody could get back.
+func TestBranchWithNoUpstreamIsRefused(t *testing.T) {
+	work, _, _ := scenario(t)
+	ctx := context.Background()
+
+	// A branch of its own, with neither an upstream nor a counterpart on the
+	// remote.
+	if _, err := gitOutput(ctx, work, "checkout", "-q", "-b", "experiment"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work, "c.txt"), []byte("three\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitOutput(ctx, work, "add", "."); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitOutput(ctx, work, "commit", "-qm", "on a branch of its own"); err != nil {
+		t.Fatal(err)
+	}
+
+	risk := CheckAdoptable(ctx, work)
+	if risk.Reason == "" {
+		t.Fatal("a branch whose state cannot be compared was allowed to adopt")
+	}
+	if !strings.Contains(risk.Reason, "cannot tell") {
+		t.Errorf("the refusal does not say that the answer is unknown: %q", risk.Reason)
+	}
+	if !strings.Contains(risk.Reason, "experiment") {
+		t.Errorf("the refusal does not name the branch: %q", risk.Reason)
+	}
+}
+
+// TestRemoteTrackingBranchIsEnoughWithoutAnUpstream keeps the refusal from
+// being so broad that ordinary clones trip it. A branch with no upstream set
+// but a counterpart on the remote can still be compared.
+func TestRemoteTrackingBranchIsEnoughWithoutAnUpstream(t *testing.T) {
+	work, _, _ := scenario(t)
+	ctx := context.Background()
+
+	// Drop the upstream, leaving origin/main in place.
+	if _, err := gitOutput(ctx, work, "branch", "--unset-upstream", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if risk := CheckAdoptable(ctx, work); risk.Reason != "" {
+		t.Errorf("a branch with origin/main to compare against was refused: %s", risk.Reason)
+	}
+
+	// And it still notices a commit that has not been pushed.
+	if err := os.WriteFile(filepath.Join(work, "d.txt"), []byte("four\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitOutput(ctx, work, "add", "."); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitOutput(ctx, work, "commit", "-qm", "unpushed"); err != nil {
+		t.Fatal(err)
+	}
+	risk := CheckAdoptable(ctx, work)
+	if !strings.Contains(risk.Reason, "never pushed") {
+		t.Errorf("an unpushed commit went unnoticed without an upstream: %q", risk.Reason)
+	}
+}

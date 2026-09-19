@@ -37,19 +37,39 @@ func CheckAdoptable(ctx context.Context, path string) AdoptRisk {
 			count(n, "file", "files"), pickThem(n))}
 	}
 
-	// Commits here that the Gitea remote has never seen.
-	ahead, err := gitOutput(ctx, path, "rev-list", "--count", "@{upstream}..HEAD")
+	// Commits here that the Gitea remote has never seen. The branch's upstream
+	// is asked first, and the matching remote-tracking branch after it, since
+	// a branch created locally often has no upstream set while origin/<branch>
+	// exists all the same.
+	branch, err := gitOutput(ctx, path, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
-		// No upstream configured is not a danger in itself: there is simply
-		// nothing to compare against, and the uncommitted check above has
-		// already covered the working copy.
+		return AdoptRisk{Reason: fmt.Sprintf("cannot read the current branch: %v", err)}
+	}
+	branch = strings.TrimSpace(branch)
+
+	for _, base := range []string{"@{upstream}", "origin/" + branch} {
+		ahead, err := gitOutput(ctx, path, "rev-list", "--count", base+"..HEAD")
+		if err != nil {
+			continue
+		}
+		n, convErr := strconv.Atoi(strings.TrimSpace(ahead))
+		if convErr != nil {
+			continue
+		}
+		if n > 0 {
+			return AdoptRisk{Reason: fmt.Sprintf("%s never pushed to Gitea; push %s first",
+				count(n, "commit", "commits"), pickThem(n))}
+		}
 		return AdoptRisk{}
 	}
-	if n, convErr := strconv.Atoi(strings.TrimSpace(ahead)); convErr == nil && n > 0 {
-		return AdoptRisk{Reason: fmt.Sprintf("%s never pushed to Gitea; push %s first",
-			count(n, "commit", "commits"), pickThem(n))}
-	}
-	return AdoptRisk{}
+
+	// Neither comparison was possible, so whether anything would be lost is
+	// unknown -- and for an operation with no way back, unknown has to mean
+	// no. Saying "probably fine" about commits that cannot be recovered is the
+	// one answer this function must never give.
+	return AdoptRisk{Reason: fmt.Sprintf(
+		"cannot tell whether %q has been pushed: no upstream and no origin/%s to compare against",
+		branch, branch)}
 }
 
 // Adopt makes a working copy a clone of the rewritten GitHub repository.
