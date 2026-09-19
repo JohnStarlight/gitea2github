@@ -9,26 +9,6 @@ import (
 // take, leaving the rest of the terminal for the list.
 const chromeHeight = 10
 
-// ANSI attributes, written out rather than pulled from a styling library.
-// The screen needs six of them and nothing more.
-const (
-	ansiReset   = "\x1b[0m"
-	ansiBold    = "\x1b[1m"
-	ansiDim     = "\x1b[2m"
-	ansiReverse = "\x1b[7m"
-	ansiGreen   = "\x1b[32m"
-
-	// The toggles at the top are drawn in the bright variant of the colour of
-	// the rows they govern: near enough to connect the two at a glance, far
-	// enough that a control is not mistaken for content.
-	ansiBrightGreen = "\x1b[92m"
-	ansiBrightAmber = "\x1b[93m"
-	ansiBrightCyan  = "\x1b[96m"
-	ansiYellow      = "\x1b[33m"
-	ansiAmber       = "\x1b[33m"
-	ansiCyan        = "\x1b[36m"
-)
-
 // View renders the whole screen.
 //
 // Every frame is drawn in full rather than diffed against the last one. The
@@ -161,7 +141,7 @@ func (m *Model) redactBar() string {
 	// the colour the list will take.
 	colour := ansiDim
 	if m.redact {
-		colour = ansiBrightAmber
+		colour = ansiBrightRedacted
 	}
 	line := fmt.Sprintf("  %s %s%s redact emails%s", dim("e"), colour, checkbox(m.redact), ansiReset)
 	if !m.redact {
@@ -197,7 +177,7 @@ func (m *Model) renderRow(i int, cursor bool) []string {
 
 	nameW, visW := m.columns()
 	visibility := ""
-	if st == stateVerbatim || st == stateModified {
+	if st == stateVerbatim || st.changed() {
 		visibility = m.visibilityWord(r)
 	}
 
@@ -239,7 +219,7 @@ func (m *Model) columns() (nameW, visW int) {
 
 	// The visibility column only exists when some row on screen would fill it.
 	for _, r := range m.rows {
-		if s := m.rowState(r); s == stateVerbatim || s == stateModified {
+		if s := m.rowState(r); s == stateVerbatim || s.changed() {
 			visW = 20
 			break
 		}
@@ -260,7 +240,7 @@ func (m *Model) detailFor(r Row, st state) string {
 		return "not selected"
 	case stateAvailable:
 		return gateHint(r, m.groups, m.forks, m.archived)
-	case stateModified:
+	case stateVisibility, stateRedacted, stateBothWays:
 		var changes []string
 		if r.Private != r.SourcePrivate {
 			changes = append(changes, "now "+visibilityName(r.Private))
@@ -310,30 +290,6 @@ func wrapText(s string, width int) []string {
 func (m *Model) footer() string {
 	t := m.tally()
 
-	// The counts read as arithmetic rather than as a row of independent
-	// figures: "30 to migrate -> 20 unchanged + 10 with changes" can be
-	// checked at a glance, where four separate numbers have to be reconciled
-	// by the reader. Each is drawn in the colour of the rows it counts, so the
-	// footer is the key to the list above it.
-	var head string
-	switch {
-	case t.Migrating() == 0:
-		head = ansiBold + "nothing to migrate" + ansiReset
-	case t.Modified == 0:
-		// "+ 0 with changes" is noise; say the useful thing instead.
-		head = fmt.Sprintf("%s%d to migrate%s, %sall unchanged%s",
-			ansiBold, t.Migrating(), ansiReset, ansiGreen, ansiReset)
-	case t.Verbatim == 0:
-		head = fmt.Sprintf("%s%d to migrate%s, %sall with changes%s",
-			ansiBold, t.Migrating(), ansiReset, ansiAmber, ansiReset)
-	default:
-		head = fmt.Sprintf("%s%d to migrate%s -> %s%d unchanged%s + %s%d with changes%s",
-			ansiBold, t.Migrating(), ansiReset,
-			ansiGreen, t.Verbatim, ansiReset,
-			ansiAmber, t.Modified, ansiReset)
-	}
-
-	// A category with nothing in it is left out rather than shown as a zero.
 	var rest []string
 	if t.Available > 0 {
 		rest = append(rest, fmt.Sprintf("%s%d could add%s", ansiCyan, t.Available, ansiReset))
@@ -341,17 +297,72 @@ func (m *Model) footer() string {
 	if t.Inert > 0 {
 		rest = append(rest, fmt.Sprintf("%s%d not moving%s", ansiDim, t.Inert, ansiReset))
 	}
-
-	tally := "  " + head
+	tail := ""
 	if len(rest) > 0 {
-		tally += "   " + strings.Join(rest, "   ")
-	}
-	if len(stripANSI(tally)) > m.width {
-		// On a narrow terminal the count that matters is the one about to be
-		// acted on; the breakdown is reassurance, not information.
-		tally = "  " + head
+		tail = "   " + strings.Join(rest, "   ")
 	}
 
+	// Three widths of the same sentence, narrowest last. The breakdown is
+	// dropped a piece at a time rather than truncated, because a count cut off
+	// halfway is worse than a count that was never shown.
+	for _, line := range []string{
+		"  " + m.countSentence(t, true) + tail,
+		"  " + m.countSentence(t, false) + tail,
+		"  " + m.countSentence(t, false),
+	} {
+		if len(stripANSI(line)) <= m.width {
+			return m.footerLines(line)
+		}
+	}
+	return m.footerLines(fmt.Sprintf("  %s%d to migrate%s", ansiBold, t.Migrating(), ansiReset))
+}
+
+// countSentence renders the counts as arithmetic. With detail, the three kinds
+// of change are named separately; without it they are summed, which is what
+// makes room on a narrow terminal.
+func (m *Model) countSentence(t tally, detail bool) string {
+	if t.Migrating() == 0 {
+		return ansiBold + "nothing to migrate" + ansiReset
+	}
+	total := fmt.Sprintf("%s%d to migrate%s", ansiBold, t.Migrating(), ansiReset)
+
+	type bucket struct {
+		n      int
+		label  string
+		colour string
+	}
+	buckets := []bucket{{t.Verbatim, "unchanged", ansiGreen}}
+	if detail {
+		buckets = append(buckets,
+			bucket{t.Visibility, "visibility", ansiVisibility},
+			bucket{t.Redacted, "redacted", ansiRedacted},
+			bucket{t.BothWays, "both", ansiBothWays})
+	} else {
+		buckets = append(buckets, bucket{t.Changed(), "with changes", ansiBothWays})
+	}
+
+	var filled []bucket
+	for _, b := range buckets {
+		if b.n > 0 {
+			filled = append(filled, b)
+		}
+	}
+
+	// Everything in one bucket: there is no sum to show, and repeating the
+	// count beside the total reads as an error rather than as arithmetic.
+	if len(filled) == 1 {
+		return fmt.Sprintf("%s, %sall %s%s", total, filled[0].colour, filled[0].label, ansiReset)
+	}
+
+	var parts []string
+	for _, b := range filled {
+		parts = append(parts, fmt.Sprintf("%s%d %s%s", b.colour, b.n, b.label, ansiReset))
+	}
+	return total + " -> " + strings.Join(parts, " + ")
+}
+
+// footerLines pairs the counts with the key hints beneath them.
+func (m *Model) footerLines(tally string) string {
 	var hint string
 	switch {
 	case m.note != "":
