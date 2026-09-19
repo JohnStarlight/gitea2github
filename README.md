@@ -178,7 +178,7 @@ Nothing is decided until you press Enter, so changing your mind about the forks
 after reading the plan costs a keystroke rather than a restart:
 
 ```
- gitea.zone01.gr  ->  github.com/ivogiake
+ gitea.zone01.gr  ->  github.com/ivogiake                        40 repositories
    1 [ ] group projects (1)   2 [ ] forks (1)   3 [ ] archived (1)
    e [x] redact emails   m keep: you@example.com
 
@@ -189,7 +189,7 @@ after reading the plan costs a keystroke rather than a restart:
    +  ivogiake/old-mirror                a fork (press 2)             ← cyan
    +  zone01/groupie-tracker             a group project (press 1)    ← cyan
 
-   3 to migrate   0 verbatim   3 modified   2 available   2 untouched
+   30 to migrate -> 20 unchanged + 10 with changes   6 could add   4 not moving
    space select   v visibility   a all   n none   / search   enter migrate   q quit
 ```
 
@@ -203,10 +203,14 @@ of the list can be read at a glance rather than one row at a time:
 | Cyan | `+` | Held back only by a closed gate: one keystroke away |
 | Grey | `-` | Nothing will happen to it — already on GitHub, empty, or unchecked |
 
-The counts along the bottom are drawn in the same colours, so the footer is the
-key to the list above it. Turning redaction on repaints every selected row at
-once, which is the point: it is the setting whose consequence is easiest to
-forget.
+The counts along the bottom read as arithmetic rather than as a row of
+independent figures — `20 + 10 = 30` can be checked at a glance — and are drawn
+in the same colours, so the footer is the key to the list above it. When there
+is nothing to split they collapse to `30 to migrate, all unchanged`, and a
+category with nothing in it is left out rather than shown as a zero.
+
+Turning redaction on repaints every selected row at once, which is the point:
+it is the setting whose consequence is easiest to forget.
 
 The symbols carry the same distinction as the colours, so the screen still
 reads in a monochrome terminal or to someone who cannot separate the hues.

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -170,5 +171,118 @@ func TestCursorStaysVisibleWhenRowsWrap(t *testing.T) {
 		if !found {
 			t.Errorf("cursor %d scrolled off screen", cursor)
 		}
+	}
+}
+
+// footerText returns the tally line without its colours, for reading in tests.
+func footerText(m *Model) string {
+	return stripANSI(strings.Split(m.footer(), "\r\n")[0])
+}
+
+// TestFooterReadsAsArithmetic pins the shape of the count line. Four
+// independent figures have to be reconciled by the reader; "30 to migrate ->
+// 20 unchanged + 10 with changes" can be checked at a glance.
+func TestFooterReadsAsArithmetic(t *testing.T) {
+	m := NewModel(stateRows(), true, true, true, false, "")
+	m.SetSize(100, 24)
+	m.rows[0].Private = !m.rows[0].SourcePrivate // one row modified
+
+	got := footerText(m)
+	for _, want := range []string{"to migrate", "->", "unchanged", "+", "with changes"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("footer %q is missing %q", got, want)
+		}
+	}
+}
+
+// TestFooterCollapsesWhenThereIsNothingToSplit stops the line reading
+// "20 unchanged + 0 with changes", which is arithmetic nobody needs.
+func TestFooterCollapsesWhenThereIsNothingToSplit(t *testing.T) {
+	m := NewModel(stateRows(), true, true, true, false, "")
+	m.SetSize(100, 24)
+
+	if got := footerText(m); !strings.Contains(got, "all unchanged") || strings.Contains(got, "+") {
+		t.Errorf("with nothing modified the footer is %q, want it collapsed", got)
+	}
+
+	m.Update(Key{Kind: KeyRune, Rune: 'e'})
+	if got := footerText(m); !strings.Contains(got, "all with changes") || strings.Contains(got, "+") {
+		t.Errorf("with everything modified the footer is %q, want it collapsed", got)
+	}
+}
+
+// TestFooterOmitsEmptyCategories keeps zeroes off the screen: a count of none
+// is not news.
+func TestFooterOmitsEmptyCategories(t *testing.T) {
+	m := NewModel(stateRows(), true, true, true, false, "")
+	m.SetSize(100, 24)
+
+	if got := footerText(m); strings.Contains(got, "could add") {
+		t.Errorf("with every gate open the footer still offers %q", got)
+	}
+}
+
+// TestFooterSaysNothingToMigratePlainly covers the account where everything is
+// already on GitHub, which is what a second run looks like.
+func TestFooterSaysNothingToMigratePlainly(t *testing.T) {
+	rows := []Row{
+		{Name: "me/a", Blocked: "already on GitHub, left untouched"},
+		{Name: "me/b", Blocked: "already on GitHub, left untouched"},
+	}
+	m := NewModel(rows, false, false, false, false, "")
+	m.SetSize(100, 24)
+
+	got := footerText(m)
+	if !strings.Contains(got, "nothing to migrate") {
+		t.Errorf("footer = %q, want it to say nothing to migrate", got)
+	}
+	if strings.Contains(got, "0 to migrate") {
+		t.Errorf("footer = %q, want words rather than a zero", got)
+	}
+}
+
+// TestFooterFitsAnEightyColumnTerminal is the width every terminal still
+// defaults to, and the reason the repository total lives in the header.
+func TestFooterFitsAnEightyColumnTerminal(t *testing.T) {
+	var rows []Row
+	for i := 0; i < 40; i++ {
+		r := Row{Name: fmt.Sprintf("me/repo-%02d", i), SourcePrivate: true, Private: true}
+		switch {
+		case i < 10:
+			r.Private = false // modified
+		case i < 16:
+			r.Fork = true // behind a gate
+		case i < 20:
+			r.Blocked = "already on GitHub, left untouched"
+		}
+		rows = append(rows, r)
+	}
+	m := NewModel(rows, false, false, false, false, "")
+	m.SetSize(80, 24)
+
+	for _, line := range strings.Split(m.View("gitea.example.com -> github.com/me"), "\r\n") {
+		if w := len(stripANSI(line)); w > 80 {
+			t.Errorf("line is %d columns wide, want at most 80: %q", w, stripANSI(line))
+		}
+	}
+	if got := footerText(m); !strings.Contains(got, "->") {
+		t.Errorf("at 80 columns the breakdown was dropped: %q", got)
+	}
+}
+
+// TestHeaderCarriesTheTotal checks the standing fact stayed out of the footer.
+func TestHeaderCarriesTheTotal(t *testing.T) {
+	m := NewModel(stateRows(), false, false, false, false, "")
+	m.SetSize(100, 24)
+
+	header := stripANSI(strings.Split(m.View("gitea -> github"), "\r\n")[0])
+	if !strings.Contains(header, "4 repositories") {
+		t.Errorf("header = %q, want it to carry the total", header)
+	}
+
+	one := NewModel(stateRows()[:1], false, false, false, false, "")
+	one.SetSize(100, 24)
+	if got := stripANSI(strings.Split(one.View("gitea -> github"), "\r\n")[0]); !strings.Contains(got, "1 repository") {
+		t.Errorf("header = %q, want the singular", got)
 	}
 }
