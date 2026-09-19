@@ -1,0 +1,222 @@
+// Package tui draws the interactive pre-flight screen: one place to choose
+// which repositories move, how visible each one lands, and whether the commit
+// history is redacted on the way.
+//
+// The screen exists because the questions it replaces could only be answered
+// in one direction. Asked as a sequence of prompts, deciding that the forks
+// were worth taking after all -- three questions later, while reading the plan
+// -- meant killing the program and starting again. Here every answer stays
+// live until the run is confirmed.
+//
+// The model in this file is deliberately free of terminal code. It is a plain
+// state machine over keys, so the whole of the interaction can be tested by
+// feeding it bytes and reading its fields, with no pseudo-terminal in sight.
+package tui
+
+import (
+	"sort"
+	"strings"
+)
+
+// Row is one repository as the screen knows it.
+//
+// Everything needed to decide its fate is resolved before the screen opens, so
+// that toggling a filter is a pure re-computation rather than another round
+// trip to GitHub.
+type Row struct {
+	Name          string // Gitea full name, e.g. "JohnStarlight/lem-in"
+	SourcePrivate bool   // visibility on Gitea
+	Private       bool   // visibility the copy would be created with
+	Fork          bool
+	Archived      bool
+	Foreign       bool // owned by somebody else: a group project
+
+	// Blocked, when non-empty, is why this repository can never be migrated in
+	// this run -- it is empty, or it is already on GitHub. Such rows stay on
+	// screen, greyed out, because "where did my repository go?" is a worse
+	// question than a line explaining it was already there.
+	Blocked string
+
+	// Include is the user's own choice for this row. It only has meaning while
+	// the row is eligible; see Model.Selected.
+	Include bool
+}
+
+// eligible reports whether the category gates currently let this row through.
+// The three conditions mirror migrate.Run exactly, so what the screen shows
+// and what the migrator does cannot drift apart.
+func (r Row) eligible(groups, forks, archived bool) bool {
+	if r.Blocked != "" {
+		return false
+	}
+	if r.Foreign && !groups {
+		return false
+	}
+	if r.Fork && !forks {
+		return false
+	}
+	if r.Archived && !archived {
+		return false
+	}
+	return true
+}
+
+// Model is the full state of the screen.
+type Model struct {
+	rows []Row
+
+	// Category gates. Off by default, matching the command line: a run that
+	// was not asked about forks does not take them.
+	groups, forks, archived bool
+
+	// redact and keepEmail carry the history-rewriting decision, which lives
+	// here rather than in a separate prompt so that the one screen holds every
+	// answer the run depends on.
+	redact    bool
+	keepEmail string
+
+	// query filters the visible rows by substring. Typing it is a search, not
+	// a selection: filtering the list never changes what is included, so a
+	// half-typed search cannot silently drop a repository from the run.
+	query     string
+	searching bool
+
+	cursor int // index into the visible rows, not into rows
+
+	width, height int
+
+	// done and cancelled record how the screen was left. Both false means it
+	// is still running.
+	done, cancelled bool
+
+	// editingEmail puts keystrokes into keepEmail instead of the key map.
+	editingEmail bool
+
+	// note is a transient one-line message shown in the footer.
+	note string
+}
+
+// NewModel builds the screen state. Rows are shown in the order given, which
+// the caller has already sorted.
+func NewModel(rows []Row, groups, forks, archived, redact bool, keepEmail string) *Model {
+	m := &Model{
+		rows:      rows,
+		groups:    groups,
+		forks:     forks,
+		archived:  archived,
+		redact:    redact,
+		keepEmail: keepEmail,
+		width:     80,
+		height:    24,
+	}
+	// Everything the gates admit starts selected. The gates are the coarse
+	// decision and the checkboxes refine it; starting with an empty selection
+	// would make the common case -- "all of my own repositories" -- the one
+	// that takes the most keystrokes.
+	for i := range m.rows {
+		m.rows[i].Include = true
+	}
+	return m
+}
+
+// SetSize records the terminal dimensions.
+func (m *Model) SetSize(w, h int) {
+	if w > 0 {
+		m.width = w
+	}
+	if h > 0 {
+		m.height = h
+	}
+}
+
+// Done and Cancelled report how the screen ended.
+func (m *Model) Done() bool      { return m.done }
+func (m *Model) Cancelled() bool { return m.cancelled }
+
+// Redact and KeepEmail expose the history-rewriting answers.
+func (m *Model) Redact() bool      { return m.redact }
+func (m *Model) KeepEmail() string { return m.keepEmail }
+
+// Gates exposes the three category answers.
+func (m *Model) Gates() (groups, forks, archived bool) {
+	return m.groups, m.forks, m.archived
+}
+
+// visible returns the indices of the rows the text query admits, in display
+// order.
+func (m *Model) visible() []int {
+	var out []int
+	q := strings.ToLower(strings.TrimSpace(m.query))
+	for i, r := range m.rows {
+		if q == "" || strings.Contains(strings.ToLower(r.Name), q) {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// Selected returns the Gitea full names that would be migrated, sorted.
+//
+// A row counts only when the gates admit it *and* the user left it checked,
+// which is what makes the footer tally and the migration agree.
+func (m *Model) Selected() []string {
+	var out []string
+	for _, r := range m.rows {
+		if r.eligible(m.groups, m.forks, m.archived) && r.Include {
+			out = append(out, r.Name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// VisibilityOverrides reports the rows whose chosen visibility differs from
+// Gitea's, keyed by Gitea full name, in the shape migrate.Options wants.
+//
+// Only genuine differences are returned: handing the migrator an override that
+// restates the source visibility would record a deliberate choice where the
+// user made none.
+func (m *Model) VisibilityOverrides() map[string]bool {
+	out := map[string]bool{}
+	for _, r := range m.rows {
+		if !r.eligible(m.groups, m.forks, m.archived) || !r.Include {
+			continue
+		}
+		if r.Private != r.SourcePrivate {
+			out[r.Name] = r.Private
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// counts tallies the footer numbers: selected, held back by a gate or a
+// checkbox, and impossible.
+func (m *Model) counts() (selected, skipped, blocked int) {
+	for _, r := range m.rows {
+		switch {
+		case r.Blocked != "":
+			blocked++
+		case r.eligible(m.groups, m.forks, m.archived) && r.Include:
+			selected++
+		default:
+			skipped++
+		}
+	}
+	return
+}
+
+// setCategory bulk-applies a gate change to the checkboxes underneath it.
+//
+// Opening a gate re-checks the rows behind it, so that "include forks" means
+// what it says even if a fork was unchecked individually earlier. Without this
+// a user could open the gate and see nothing happen, which reads as a bug.
+func (m *Model) setCategory(pred func(Row) bool, on bool) {
+	for i := range m.rows {
+		if m.rows[i].Blocked == "" && pred(m.rows[i]) {
+			m.rows[i].Include = on
+		}
+	}
+}
