@@ -48,9 +48,12 @@ go install github.com/JohnStarlight/gitea2github@latest
 
 Or from a checkout: `go build -o gitea2github .`
 
-Runs on macOS, Linux, Windows and BSD — anywhere Go and git run. Pure Go, no
-third-party dependencies, no per-OS code. Needs **Go 1.21+** to build and
-**git** on `PATH` to run; the `gh` CLI is optional.
+Runs on macOS, Linux, Windows and BSD — anywhere Go and git run. Needs **Go
+1.21+** to build and **git** on `PATH` to run; the `gh` CLI is optional.
+
+Everything is the Go standard library except `golang.org/x/term`, which is used
+only to tell a terminal from a pipe. That is roughly 165 lines of linked code
+from the Go team, and it is the whole dependency tree.
 
 ## Credentials
 
