@@ -5,9 +5,18 @@ import (
 	"strings"
 )
 
-// chromeHeight is how many lines the header, the filter bar and the footer
-// take, leaving the rest of the terminal for the list.
+// chromeHeight is how many lines the header, the two toggle bars and the
+// footer take, leaving the rest of the terminal for the list.
 const chromeHeight = 10
+
+// chrome is chromeHeight plus the redaction warning, which only occupies a
+// line while there is something to warn about.
+func (m *Model) chrome() int {
+	if m.anyRedacted() {
+		return chromeHeight + 1
+	}
+	return chromeHeight
+}
 
 // View renders the whole screen.
 //
@@ -20,9 +29,13 @@ func (m *Model) View(header string) string {
 
 	b.WriteString(m.headerLine(header) + "\r\n")
 	b.WriteString(m.gateBar() + "\r\n")
-	b.WriteString(m.redactBar() + "\r\n\r\n")
+	b.WriteString(m.redactBar() + "\r\n")
+	if warning := m.redactWarning(); warning != "" {
+		b.WriteString(warning + "\r\n")
+	}
+	b.WriteString("\r\n")
 
-	body := m.height - chromeHeight
+	body := m.height - m.chrome()
 	if body < 3 {
 		body = 3
 	}
@@ -159,18 +172,68 @@ func (m *Model) redactBar() string {
 	if redacted == selected {
 		scope = fmt.Sprintf("all %d", selected)
 	}
-	line := fmt.Sprintf("  %s %sredacting %s%s   %s all",
-		dim("e"), ansiBrightRedacted, scope, ansiReset, dim("E"))
+	line := fmt.Sprintf("  %s %sREDACTING %s%s   %s all",
+		dim("e"), ansiAlarm, scope, ansiReset, dim("E"))
 
 	if m.editingEmail {
 		return truncateANSI(fmt.Sprintf("%s   %s keep: %s%s%s",
 			line, dim("m"), ansiReverse, m.keepEmail+" ", ansiReset), m.width)
 	}
-	keep := m.keepEmail
-	if keep == "" {
-		keep = dim("none -- press m to keep your own address linked")
+	// Shortened rather than truncated as the line fills up: the hint about the
+	// kept address was being cut mid-word, and half a sentence in the middle
+	// of a warning reads as a glitch.
+	for _, tail := range m.keepTails() {
+		candidate := line + tail
+		if visibleWidth(candidate) <= m.width {
+			return candidate
+		}
 	}
-	return truncateANSI(fmt.Sprintf("%s   %s keep: %s", line, dim("m"), keep), m.width)
+	return truncateANSI(line, m.width)
+}
+
+// keepTails are the ways of saying which address survives redaction, longest
+// first.
+func (m *Model) keepTails() []string {
+	if m.keepEmail != "" {
+		return []string{
+			fmt.Sprintf("   %s keep: %s", dim("m"), m.keepEmail),
+			fmt.Sprintf("   %s %s", dim("m"), m.keepEmail),
+			"",
+		}
+	}
+	return []string{
+		fmt.Sprintf("   %s keep: %s", dim("m"), dim("none -- press m to keep your own address linked")),
+		fmt.Sprintf("   %s keep: %s", dim("m"), dim("none")),
+		"",
+	}
+}
+
+// redactWarning is the line under the toggle, shown only while redaction is on.
+//
+// Spelled out rather than left to the colour. Rewriting a history is the one
+// decision on either screen with no way back: the commits are new objects, the
+// originals never reach GitHub, and a clone of the result can no longer talk
+// to the Gitea repository it came from. That is right for work that is
+// finished and wrong for work that is not, and the difference is not something
+// to leave somebody to infer from a shade of red.
+func (m *Model) redactWarning() string {
+	if !m.anyRedacted() {
+		return ""
+	}
+	full := "  REWRITING HISTORY CANNOT BE UNDONE -- ONLY FOR FINISHED PROJECTS"
+	short := "  CANNOT BE UNDONE -- FINISHED PROJECTS ONLY"
+	shortest := "  CANNOT BE UNDONE"
+	return ansiAlarm + pickFitting(m.width, full, short, shortest) + ansiReset
+}
+
+// anyRedacted reports whether the run rewrites any history at all.
+func (m *Model) anyRedacted() bool {
+	for _, r := range m.rows {
+		if r.Redact && r.eligible(m.groups, m.forks, m.archived) && r.Include {
+			return true
+		}
+	}
+	return false
 }
 
 // renderRow draws one repository, as one line or two.

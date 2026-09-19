@@ -180,7 +180,8 @@ after reading the plan costs a keystroke rather than a restart:
 ```
  gitea.zone01.gr  ->  github.com/ivogiake                        40 repositories
    1 [ ] group projects (1)   2 [ ] forks (1)   3 [ ] archived (1)
-   e redacting 2 of 4   E all   m keep: you@example.com
+   e REDACTING 2 of 4   E all   m keep: you@example.com
+   REWRITING HISTORY CANNOT BE UNDONE -- ONLY FOR FINISHED PROJECTS
 
  > *  ivogiake/ascii-art       private   create, emails redacted      ← amber
    *  ivogiake/go-reloaded     private   create, emails redacted      ← amber
@@ -228,8 +229,12 @@ The fuller shades need a 256-colour terminal. Where `TERM` does not claim one,
 the screen falls back to the sixteen every terminal has, choosing hues that are
 further apart rather than closer so the distinction survives the downgrade.
 
-Turning redaction on repaints every selected row at once, which is the point:
-it is the setting whose consequence is easiest to forget.
+Redaction's own control is red rather than the colour of the rows it makes, and
+a warning sits under it whenever any repository is being rewritten. It is the
+only choice on either screen that cannot be taken back: the rewritten commits
+are new objects, the originals never reach GitHub, and a clone of the result
+can no longer push to the Gitea repository it came from. That is right for work
+that is finished and wrong for work that is not.
 
 The toggles along the top are drawn in the same colours, one shade brighter, so
 what a gate touches needs no explaining: cyan while its repositories wait

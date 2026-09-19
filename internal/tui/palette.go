@@ -25,9 +25,15 @@ var (
 	ansiRedacted   = "\x1b[38;5;141m" // history rewritten to hide addresses
 	ansiBothWays   = "\x1b[38;5;204m" // both of the above
 
-	ansiBrightGreen    = "\x1b[92m"
-	ansiBrightCyan     = "\x1b[96m"
-	ansiBrightRedacted = "\x1b[38;5;147m"
+	ansiBrightGreen = "\x1b[92m"
+	ansiBrightCyan  = "\x1b[96m"
+
+	// Redaction's own control is red rather than the colour of the rows it
+	// makes. It is the only choice on either screen that cannot be taken back
+	// once the run finishes: the commits it rewrites are new objects, and the
+	// originals are not on GitHub to return to. The rows stay purple, because
+	// a whole list in red reads as an error rather than as a decision.
+	ansiAlarm = "\x1b[1;31m"
 )
 
 func init() { usePalette(os.Getenv("TERM"), os.Getenv("COLORTERM")) }
@@ -47,7 +53,6 @@ func usePalette(term, colorterm string) {
 	ansiVisibility = "\x1b[33m"
 	ansiRedacted = "\x1b[35m"
 	ansiBothWays = "\x1b[31m"
-	ansiBrightRedacted = "\x1b[95m"
 }
 
 // supports256 reports whether the terminal advertises more than sixteen
