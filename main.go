@@ -96,7 +96,7 @@ Commands:
   doctor    Check that both credentials resolve and have the scopes needed
   list      List the Gitea repositories that would be considered
   migrate   Mirror repositories to GitHub
-  relink    Repoint local clones from Gitea to GitHub (takes a directory)
+  relink    Repoint local clones from Gitea to GitHub (a directory, or the current one)
 
 migrate and relink never change anything without showing you the plan first and
 asking. Run them with no flags and they will ask what you want.
@@ -1036,12 +1036,18 @@ func cmdRelink(ctx context.Context, args []string) error {
 	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
 	prompt := ui.New()
 
+	// The directory defaults to the one you are standing in, which is where
+	// clones almost always are and what the offer at the end of a migration
+	// already assumes. Nothing is changed by the scan, and both the screen and
+	// the plan name the directory they worked on, so a wrong guess is visible
+	// before anything acts on it.
 	root := fs.Arg(0)
 	if root == "" {
-		if !prompt.Interactive() {
-			return fmt.Errorf("usage: gitea2github relink [flags] <directory>")
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("no directory given and the current one cannot be read: %w", err)
 		}
-		root = prompt.Line("Which directory holds your clones?", ".")
+		root = cwd
 	}
 
 	parsed, err := url.Parse(*giteaURL)
@@ -1072,10 +1078,17 @@ func cmdRelink(ctx context.Context, args []string) error {
 		Verify:        *verify,
 		DryRun:        true,
 	}
-	fmt.Printf("\nLooking for clones under %s...\n", root)
+	fmt.Printf("\nLooking for clones under %s...\n", shortenPath(root))
 	probe, err := relink.Run(ctx, probeOptions)
 	if err != nil {
 		return err
+	}
+	if len(probe) == 0 {
+		// Opening an empty screen would leave the user pressing q to find out
+		// that nothing was there.
+		fmt.Printf("No git working copies under %s.\n", shortenPath(root))
+		fmt.Println("Give the directory that holds your clones: gitea2github relink <directory>")
+		return nil
 	}
 
 	var only map[string]bool

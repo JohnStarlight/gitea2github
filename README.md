@@ -282,8 +282,11 @@ Gitea for audits is not the one you are done with. `A` gives every clone on
 screen the destination of the one under the cursor, and `--push-to` still sets
 them all from the command line.
 
-`relink <directory>` opens the same screen on its own, for clones migrated by
-hand or on another machine. The offer after a migration never runs unasked:
+`relink` opens the same screen on its own, for clones migrated by hand or on
+another machine. With no directory it scans the one you are standing in; give
+it a path to scan somewhere else. The scan changes nothing, and both the screen
+and the plan name the directory they worked on, so a wrong guess is visible
+before anything acts on it. The offer after a migration never runs unasked:
 `--yes` is consent to the migration that was described, not to rewriting
 remotes in directories it never touched, so an unattended run prints the
 command to use instead.
