@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -594,7 +595,12 @@ func offerRelink(ctx context.Context, prompt *ui.Prompter, giteaURL, ghLogin, gh
 		return
 	}
 
-	only, modes, cancelled, screenErr := chooseRelink(probe, relink.ModeGitHub, "gitea", cwd, ghLogin)
+	base := relink.Options{
+		GiteaHost: parsed.Host, GitHubUser: ghLogin, GitHubTok: ghToken,
+		OldRemoteName: "gitea", Mode: relink.ModeGitHub, Verify: true,
+	}
+	only, modes, chosenRoot, cancelled, screenErr := chooseRelink(
+		probe, relink.ModeGitHub, "gitea", cwd, ghLogin, relinkScanner(ctx, base))
 	switch {
 	case screenErr != nil:
 		fmt.Printf("  %v\n", screenErr)
@@ -602,6 +608,18 @@ func offerRelink(ctx context.Context, prompt *ui.Prompter, giteaURL, ghLogin, gh
 	case cancelled, len(only) == 0:
 		fmt.Println("  Left alone; no remote was changed.")
 		return
+	}
+
+	// The screen may have been pointed elsewhere, in which case the chosen
+	// paths came from that scan rather than this one.
+	root := cwd
+	if newRoot := expandHome(chosenRoot); chosenRoot != "" && newRoot != cwd {
+		root = newRoot
+		base.Root, base.DryRun = root, true
+		if rescanned, err := relink.Run(ctx, base); err == nil {
+			probe = rescanned
+		}
+		base.DryRun = false
 	}
 
 	plan := relinkPlanFromProbe(probe, only, modes, relink.ModeGitHub, "gitea")
@@ -612,16 +630,13 @@ func offerRelink(ctx context.Context, prompt *ui.Prompter, giteaURL, ghLogin, gh
 	}
 
 	var logMu sync.Mutex
-	results, err := relink.Run(ctx, relink.Options{
-		Root: cwd, GiteaHost: parsed.Host, GitHubUser: ghLogin, GitHubTok: ghToken,
-		OldRemoteName: "gitea", Mode: relink.ModeGitHub, Verify: true,
-		Only: only, ModeFor: modes,
-		Log: func(format string, args ...any) {
-			logMu.Lock()
-			defer logMu.Unlock()
-			fmt.Printf("  "+format+"\n", args...)
-		},
-	})
+	base.Root, base.Only, base.ModeFor = root, only, modes
+	base.Log = func(format string, args ...any) {
+		logMu.Lock()
+		defer logMu.Unlock()
+		fmt.Printf("  "+format+"\n", args...)
+	}
+	results, err := relink.Run(ctx, base)
 	if err != nil {
 		fmt.Printf("  %v\n", err)
 		return
@@ -763,10 +778,56 @@ func forDisplay(rawURL string) string {
 	return parsed.String()
 }
 
-// chooseRelink opens the repointing screen and returns what was chosen.
-func chooseRelink(probe []relink.Result, mode, oldName, root, ghLogin string) (
-	only map[string]bool, modes map[string]string, cancelled bool, err error) {
+// errScreenCancelled marks a screen the user left without confirming, so the
+// caller can tell it apart from a real failure.
+var errScreenCancelled = errors.New("screen cancelled")
 
+// chooseRelink opens the repointing screen and returns what was chosen.
+func chooseRelink(probe []relink.Result, mode, oldName, root, ghLogin string,
+	rescan tui.Rescan) (
+	only map[string]bool, modes map[string]string, finalRoot string, cancelled bool, err error) {
+
+	clones := clonesFromProbe(probe, mode)
+
+	model := tui.NewRelinkModel(clones, mode, oldName).WithRoot(shortenPath(root), rescan)
+	header := fmt.Sprintf("github.com/%s", ghLogin)
+	switch screenErr := tui.Run(header, model); {
+	case errors.Is(screenErr, tui.ErrCancelled):
+		return nil, nil, "", true, nil
+	case screenErr != nil:
+		return nil, nil, "", false, screenErr
+	}
+	only, modes = model.Chosen()
+	// The screen may have been pointed somewhere else, in which case the paths
+	// it chose belong to a different directory than the one it opened on.
+	return only, modes, model.Root(), false, nil
+}
+
+// relinkScanner returns the callback the repointing screen uses to look at
+// another directory.
+//
+// The screen is given a function rather than the options themselves so that it
+// stays free of the migrate and relink packages' configuration, and so a test
+// can drive it with a fake that touches no disk.
+func relinkScanner(ctx context.Context, base relink.Options) tui.Rescan {
+	return func(root string) ([]tui.Clone, error) {
+		opts := base
+		opts.Root = expandHome(root)
+		opts.DryRun = true
+		// A directory chosen on the screen replaces the earlier selection
+		// wholesale, so neither filter from the previous scan applies.
+		opts.Only, opts.ModeFor = nil, nil
+
+		found, err := relink.Run(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+		return clonesFromProbe(found, base.Mode), nil
+	}
+}
+
+// clonesFromProbe turns a scan into rows for the screen.
+func clonesFromProbe(probe []relink.Result, mode string) []tui.Clone {
 	clones := make([]tui.Clone, 0, len(probe))
 	for _, r := range probe {
 		clone := tui.Clone{Path: r.Path, Display: shortenPath(r.Path), Mode: mode}
@@ -777,17 +838,20 @@ func chooseRelink(probe []relink.Result, mode, oldName, root, ghLogin string) (
 		}
 		clones = append(clones, clone)
 	}
+	return clones
+}
 
-	model := tui.NewRelinkModel(clones, mode, oldName)
-	header := fmt.Sprintf("%s  ->  github.com/%s", shortenPath(root), ghLogin)
-	switch screenErr := tui.Run(header, model); {
-	case errors.Is(screenErr, tui.ErrCancelled):
-		return nil, nil, true, nil
-	case screenErr != nil:
-		return nil, nil, false, screenErr
+// expandHome turns a leading ~ back into the home directory, so a path typed
+// on the screen behaves the way the same path typed at a shell would.
+func expandHome(path string) string {
+	if path != "~" && !strings.HasPrefix(path, "~/") {
+		return path
 	}
-	only, modes = model.Chosen()
-	return only, modes, false, nil
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	return filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(path, "~"), "/"))
 }
 
 // relinkPlanFromProbe narrows the scan to the chosen clones and relabels each
@@ -1096,19 +1160,38 @@ func cmdRelink(ctx context.Context, args []string) error {
 
 	switch {
 	case !*noTUI && !*dryRun && !*assumeYes && tui.Available():
-		chosen, modes, cancelled, screenErr := chooseRelink(probe, *pushTo, *oldName, root, ghLogin)
-		if screenErr != nil {
-			return screenErr
-		}
-		if cancelled {
+		chosen, modes, chosenRoot, screenErr := func() (map[string]bool, map[string]string, string, error) {
+			c, m, r, cancelled, err := chooseRelink(
+				probe, *pushTo, *oldName, root, ghLogin, relinkScanner(ctx, probeOptions))
+			if cancelled {
+				return nil, nil, "", errScreenCancelled
+			}
+			return c, m, r, err
+		}()
+		if errors.Is(screenErr, errScreenCancelled) {
 			fmt.Println("Cancelled; nothing was changed.")
 			return nil
+		}
+		if screenErr != nil {
+			return screenErr
 		}
 		if len(chosen) == 0 {
 			fmt.Println("Nothing selected; nothing was changed.")
 			return nil
 		}
 		only, modeFor = chosen, modes
+
+		// The screen may have been pointed at another directory. Its scan is
+		// the one the chosen paths came from, so the plan has to be built from
+		// there rather than from the sweep this command started with.
+		if newRoot := expandHome(chosenRoot); newRoot != root && chosenRoot != "" {
+			root = newRoot
+			probeOptions.Root = root
+			probe, err = relink.Run(ctx, probeOptions)
+			if err != nil {
+				return err
+			}
+		}
 
 	case prompt.Interactive() && !*dryRun && !*assumeYes && !given["push-to"]:
 		modes := []string{relink.ModeGitHub, relink.ModeBoth, relink.ModeGitea}

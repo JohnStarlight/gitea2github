@@ -263,8 +263,9 @@ machine still push to Gitea. When a migration finishes, `migrate` offers to
 repoint them and opens a second screen for the clones it finds:
 
 ```
- ~/Git  ->  github.com/ivogiake                                     5 clones
+ github.com/ivogiake                                                5 clones
    1 [x] github   2 [ ] both   3 [ ] gitea   A all
+   d directory: ~/Git
 
  > *  ~/Git/ascii-art     github  move origin to GitHub, keeping Gitea as gitea
    *  ~/Git/lem-in        both    make one push reach both servers
@@ -273,8 +274,14 @@ repoint them and opens a second screen for the clones it finds:
    -  ~/Git/quad                  no matching repository on GitHub yet
 
    3 to repoint   1 github   1 both   1 gitea   2 left alone
-   space select   1/2/3 destination   A all   a/n all/none   enter repoint   q quit
+   space select   1/2/3 destination   A all   d directory   enter repoint   q quit
 ```
+
+`d` points the screen at another directory and rescans without leaving it, so
+opening it on the wrong folder costs a keystroke rather than a restart. The
+scan walks the disk and asks GitHub about every clone it finds, so the screen
+says what it is doing while it waits, and a path that cannot be read leaves the
+selection you had built up alone.
 
 The destination is chosen per clone rather than per run: a folder of coursework
 rarely wants one answer for all of it — the group project you still push to

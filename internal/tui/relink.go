@@ -32,10 +32,25 @@ type Clone struct {
 	Mode    string
 }
 
+// Rescan looks for working copies under root and returns them as rows. It is
+// supplied by the caller so the model stays free of I/O and can be driven by a
+// test with a fake.
+type Rescan func(root string) ([]Clone, error)
+
 // RelinkModel is the state of the repointing screen.
 type RelinkModel struct {
 	clones  []Clone
 	oldName string // what the Gitea remote is renamed to under ModeGitHub
+
+	// root is the directory being looked at, which can be changed without
+	// leaving the screen: the first guess is the working directory, and being
+	// in the wrong one should cost a keystroke rather than a restart.
+	root    string
+	rescan  Rescan
+	newRoot string // the path typed but not yet scanned
+
+	editingRoot bool
+	scanning    string // non-empty while a scan is owed for this path
 
 	query     string
 	searching bool
@@ -62,6 +77,55 @@ func NewRelinkModel(clones []Clone, mode, oldName string) *RelinkModel {
 		oldName: oldName,
 		width:   80,
 		height:  24,
+	}
+}
+
+// WithRoot records the directory the clones came from and how to look at
+// another one. Without it the screen still works; it simply cannot be pointed
+// somewhere else.
+func (m *RelinkModel) WithRoot(root string, rescan Rescan) *RelinkModel {
+	m.root, m.rescan = root, rescan
+	return m
+}
+
+// Root is the directory the chosen clones were found under.
+func (m *RelinkModel) Root() string { return m.root }
+
+// Working reports that a directory has been given and not yet scanned.
+func (m *RelinkModel) Working() bool { return m.scanning != "" }
+
+// Work performs the scan the last keystroke asked for.
+//
+// Separated from Update so the runner can draw the frame that says what is
+// happening before the wait starts: the scan walks the disk and asks GitHub
+// about every clone it finds, which is long enough for a frozen screen to look
+// like a hung one.
+func (m *RelinkModel) Work() {
+	root := m.scanning
+	m.scanning = ""
+	if m.rescan == nil {
+		return
+	}
+
+	found, err := m.rescan(root)
+	if err != nil {
+		// The list already on screen is left alone: a mistyped path should
+		// cost a message, not the selection built up so far.
+		m.note = "could not scan " + root + ": " + err.Error()
+		return
+	}
+
+	m.clones = found
+	for i := range m.clones {
+		m.clones[i].Include = m.clones[i].Blocked == ""
+		if m.clones[i].Mode == "" {
+			m.clones[i].Mode = relink.ModeGitHub
+		}
+	}
+	m.root = root
+	m.query, m.cursor = "", 0
+	if len(found) == 0 {
+		m.note = "no git working copies under " + root
 	}
 }
 
@@ -156,6 +220,10 @@ func modeLabel(mode string) string {
 // Update applies one keypress.
 func (m *RelinkModel) Update(k Key) {
 	m.note = ""
+	if m.editingRoot {
+		m.updateRoot(k)
+		return
+	}
 	if m.searching {
 		m.updateSearch(k)
 		return
@@ -208,12 +276,46 @@ func (m *RelinkModel) Update(k Key) {
 		m.setMode(relink.ModeGitea)
 	case 'A':
 		m.applyModeToAll()
+	case 'd':
+		if m.rescan == nil {
+			m.note = "this screen cannot change directory"
+			return
+		}
+		m.editingRoot = true
+		m.newRoot = m.root
 	case 'a':
 		m.setAll(true)
 	case 'n':
 		m.setAll(false)
 	case '/':
 		m.searching = true
+	}
+}
+
+// updateRoot handles keys while the directory box has focus.
+func (m *RelinkModel) updateRoot(k Key) {
+	switch k.Kind {
+	case KeyEnter:
+		m.editingRoot = false
+		typed := strings.TrimSpace(m.newRoot)
+		if typed == "" || typed == m.root {
+			return
+		}
+		// Recorded rather than scanned here, so the runner can draw the frame
+		// that says what is happening before the wait starts.
+		m.scanning = typed
+	case KeyEscape, KeyCtrlC:
+		m.editingRoot = false
+		m.newRoot = ""
+	case KeyBackspace:
+		if m.newRoot != "" {
+			_, size := lastRune(m.newRoot)
+			m.newRoot = m.newRoot[:len(m.newRoot)-size]
+		}
+	case KeySpace:
+		m.newRoot += " "
+	case KeyRune:
+		m.newRoot += string(k.Rune)
 	}
 }
 
@@ -310,7 +412,7 @@ func (m *RelinkModel) setAll(on bool) {
 
 // relinkChrome is how many lines the header, the destination bar and the
 // footer take.
-const relinkChrome = 9
+const relinkChrome = 10
 
 // View draws the screen.
 func (m *RelinkModel) View(header string) string {
@@ -326,7 +428,8 @@ func (m *RelinkModel) View(header string) string {
 	} else {
 		b.WriteString(ansiBold + header + ansiReset + strings.Repeat(" ", gap) + dim(count) + "\r\n")
 	}
-	b.WriteString(m.destinationBar() + "\r\n\r\n")
+	b.WriteString(m.destinationBar() + "\r\n")
+	b.WriteString(m.rootBar() + "\r\n\r\n")
 
 	body := m.height - relinkChrome
 	if body < 3 {
@@ -378,6 +481,22 @@ func (m *RelinkModel) destinationBar() string {
 			dim(d.key), modeColour(d.mode), marker, modeLabel(d.mode), ansiReset))
 	}
 	return truncateANSI("  "+strings.Join(parts, "   ")+"   "+dim("A all"), m.width)
+}
+
+// rootBar shows the directory being looked at, and lets it be changed.
+func (m *RelinkModel) rootBar() string {
+	if m.rescan == nil {
+		return truncateANSI("  "+dim("looking at "+m.root), m.width)
+	}
+	if m.scanning != "" {
+		return truncateANSI(fmt.Sprintf("  %s%s scanning %s...%s",
+			ansiCyan, "d", m.scanning, ansiReset), m.width)
+	}
+	if m.editingRoot {
+		return truncateANSI(fmt.Sprintf("  %s directory: %s%s%s",
+			dim("d"), ansiReverse, m.newRoot+" ", ansiReset), m.width)
+	}
+	return truncateANSI(fmt.Sprintf("  %s directory: %s", dim("d"), m.root), m.width)
 }
 
 // renderClone draws one working copy.
@@ -451,9 +570,12 @@ func (m *RelinkModel) relinkFooter() string {
 	}
 
 	hint := dim(pickFitting(m.width,
-		"  space select   1/2/3 destination   A all   a/n all/none   / search   enter repoint   q quit",
-		"  space   1/2/3 dest   A all   a/n   / search   enter go   q quit",
+		"  space select   1/2/3 destination   A all   d directory   / search   enter repoint   q quit",
+		"  space   1/2/3 dest   A all   d dir   / search   enter go   q quit",
 		"  enter go   q quit"))
+	if m.editingRoot {
+		hint = dim(truncate("  type a directory, enter to scan it, esc to keep this one", m.width))
+	}
 	if m.note != "" {
 		hint = ansiYellow + truncate(m.note, m.width-2) + ansiReset
 	}

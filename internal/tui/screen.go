@@ -42,6 +42,18 @@ type Screen interface {
 	View(header string) string
 }
 
+// Working is a screen that sometimes has slow work to do after a keystroke --
+// rescanning a directory, say, which walks the disk and asks GitHub about
+// every clone it finds.
+//
+// The runner draws the frame before starting that work, so the screen can say
+// what it is doing rather than freezing on the previous frame and looking like
+// it has hung.
+type Working interface {
+	Working() bool
+	Work()
+}
+
 // Run opens the screen, drives it until the user confirms or quits, and
 // returns the model holding their answers.
 //
@@ -117,6 +129,14 @@ func Run(header string, m Screen) error {
 		}
 
 		m.Update(key)
+
+		if w, ok := m.(Working); ok && w.Working() {
+			// Draw first, so the screen shows what it is about to spend time
+			// on, then do it.
+			fmt.Fprint(out, ansiClear+m.View(header))
+			w.Work()
+		}
+
 		if m.Done() {
 			if m.Cancelled() {
 				return ErrCancelled

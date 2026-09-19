@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -221,3 +222,172 @@ func TestRowsFitWhenNamesAreNotASCII(t *testing.T) {
 		}
 	}
 }
+
+// typePath feeds a path into the directory box a character at a time.
+func typePath(m *RelinkModel, path string) {
+	for _, r := range path {
+		m.Update(Key{Kind: KeyRune, Rune: r})
+	}
+}
+
+// fakeScanner stands in for the real sweep, so the screen can be driven
+// without a disk or a GitHub account behind it.
+func fakeScanner(byRoot map[string][]Clone, fail map[string]error) (Rescan, *[]string) {
+	var asked []string
+	return func(root string) ([]Clone, error) {
+		asked = append(asked, root)
+		if err, bad := fail[root]; bad {
+			return nil, err
+		}
+		return byRoot[root], nil
+	}, &asked
+}
+
+// TestDirectoryCanBeChangedWithoutLeavingTheScreen is the point of the key:
+// being in the wrong directory should cost a keystroke, not a restart.
+func TestDirectoryCanBeChangedWithoutLeavingTheScreen(t *testing.T) {
+	elsewhere := []Clone{
+		{Path: "/home/me/Work/api", Display: "~/Work/api"},
+		{Path: "/home/me/Work/web", Display: "~/Work/web"},
+	}
+	scan, asked := fakeScanner(map[string][]Clone{"~/Work": elsewhere}, nil)
+
+	m := NewRelinkModel(sampleClones(), relink.ModeGitHub, "gitea").WithRoot("~/Git", scan)
+	m.SetSize(96, 20)
+
+	m.Update(Key{Kind: KeyRune, Rune: 'd'})
+	// The box opens on the current directory, so a nearby path is a small edit.
+	for range "Git" {
+		m.Update(Key{Kind: KeyBackspace})
+	}
+	typePath(m, "Work")
+	m.Update(Key{Kind: KeyEnter})
+
+	if !m.Working() {
+		t.Fatal("enter on a new directory did not ask for a scan")
+	}
+	m.Work()
+
+	if len(*asked) != 1 || (*asked)[0] != "~/Work" {
+		t.Errorf("scanned %v, want [~/Work]", *asked)
+	}
+	if m.Root() != "~/Work" {
+		t.Errorf("Root = %q after the scan, want ~/Work", m.Root())
+	}
+	only, _ := m.Chosen()
+	if len(only) != 2 || !only["/home/me/Work/api"] {
+		t.Errorf("chose %v, want the two clones from the new directory", only)
+	}
+	for path := range only {
+		if strings.Contains(path, "/Git/") {
+			t.Errorf("a clone from the old directory survived the change: %s", path)
+		}
+	}
+}
+
+// TestWorkIsSeparateFromUpdate is what lets the screen say what it is doing.
+// The scan walks the disk and asks GitHub about every clone it finds, so doing
+// it inside Update would freeze the previous frame and look like a hang.
+func TestWorkIsSeparateFromUpdate(t *testing.T) {
+	scan, asked := fakeScanner(map[string][]Clone{"~/Work": nil}, nil)
+	m := NewRelinkModel(sampleClones(), relink.ModeGitHub, "gitea").WithRoot("~/Git", scan)
+
+	m.Update(Key{Kind: KeyRune, Rune: 'd'})
+	for range "Git" {
+		m.Update(Key{Kind: KeyBackspace})
+	}
+	typePath(m, "Work")
+	m.Update(Key{Kind: KeyEnter})
+
+	if len(*asked) != 0 {
+		t.Error("Update performed the scan itself, leaving nothing to draw first")
+	}
+	if !m.Working() {
+		t.Fatal("the screen does not report that it has work to do")
+	}
+	m.SetSize(96, 20)
+	if frame := stripANSI(m.View("x")); !strings.Contains(frame, "scanning ~/Work") {
+		t.Errorf("the frame drawn before the scan does not say what it is doing:\n%s", frame)
+	}
+	m.Work()
+	if m.Working() {
+		t.Error("the screen still reports work after doing it")
+	}
+}
+
+// TestAFailedScanKeepsWhatWasOnScreen stops a mistyped path costing the
+// selection built up so far.
+func TestAFailedScanKeepsWhatWasOnScreen(t *testing.T) {
+	scan, _ := fakeScanner(nil, map[string]error{"~/nope": errNoSuchDir})
+	m := NewRelinkModel(sampleClones(), relink.ModeGitHub, "gitea").WithRoot("~/Git", scan)
+	m.SetSize(96, 20)
+
+	before, _ := m.Chosen()
+	m.Update(Key{Kind: KeyRune, Rune: 'd'})
+	for range "~/Git" {
+		m.Update(Key{Kind: KeyBackspace})
+	}
+	typePath(m, "~/nope")
+	m.Update(Key{Kind: KeyEnter})
+	m.Work()
+
+	after, _ := m.Chosen()
+	if len(after) != len(before) {
+		t.Errorf("a failed scan changed the selection: %d -> %d", len(before), len(after))
+	}
+	if m.Root() != "~/Git" {
+		t.Errorf("a failed scan moved the directory to %q", m.Root())
+	}
+	if m.note == "" {
+		t.Error("a failed scan said nothing about why")
+	}
+}
+
+// TestEscapeKeepsTheCurrentDirectory covers backing out of the box.
+func TestEscapeKeepsTheCurrentDirectory(t *testing.T) {
+	scan, asked := fakeScanner(nil, nil)
+	m := NewRelinkModel(sampleClones(), relink.ModeGitHub, "gitea").WithRoot("~/Git", scan)
+
+	m.Update(Key{Kind: KeyRune, Rune: 'd'})
+	typePath(m, "/somewhere/else")
+	m.Update(Key{Kind: KeyEscape})
+
+	if m.Working() || len(*asked) != 0 {
+		t.Error("escaping the directory box still asked for a scan")
+	}
+	if m.Root() != "~/Git" {
+		t.Errorf("Root = %q after escaping, want ~/Git", m.Root())
+	}
+	if m.Cancelled() {
+		t.Error("escaping the directory box quit the whole screen")
+	}
+}
+
+// TestTheSameDirectoryIsNotRescanned keeps an accidental Enter from costing a
+// sweep of the disk and a round of GitHub lookups.
+func TestTheSameDirectoryIsNotRescanned(t *testing.T) {
+	scan, asked := fakeScanner(nil, nil)
+	m := NewRelinkModel(sampleClones(), relink.ModeGitHub, "gitea").WithRoot("~/Git", scan)
+
+	m.Update(Key{Kind: KeyRune, Rune: 'd'})
+	m.Update(Key{Kind: KeyEnter})
+
+	if m.Working() || len(*asked) != 0 {
+		t.Errorf("re-entering the same directory rescanned it: %v", *asked)
+	}
+}
+
+// TestScreensWithoutAScannerSaySo covers the model built without WithRoot.
+func TestScreensWithoutAScannerSaySo(t *testing.T) {
+	m := newRelink()
+	m.Update(Key{Kind: KeyRune, Rune: 'd'})
+	if m.note == "" {
+		t.Error("d on a screen that cannot change directory said nothing")
+	}
+	if m.Working() {
+		t.Error("a screen with no scanner asked for a scan")
+	}
+}
+
+// errNoSuchDir stands in for whatever the filesystem would return.
+var errNoSuchDir = errors.New("no such directory")
