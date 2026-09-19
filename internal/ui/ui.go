@@ -15,6 +15,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"golang.org/x/term"
 )
 
 // Prompter asks questions on a terminal.
@@ -48,15 +50,15 @@ func (p *Prompter) Interactive() bool { return p.interactive }
 // IsTerminal reports whether f is attached to a terminal rather than a pipe or
 // a file.
 //
-// Done through the file mode instead of an ioctl so that it stays pure Go and
-// needs no third-party terminal package: a character device is a terminal, a
-// redirect or a pipe is not.
+// This asks the operating system directly, via the same ioctl a shell uses.
+// The obvious pure-Go shortcut -- treating any character device as a terminal
+// -- is wrong in a way that matters here: /dev/null is a character device, so
+// a run under cron, a container or a CI job with stdin redirected from it
+// would believe a human was present, ask its questions into the void and
+// report a bare "Cancelled" instead of the line explaining that --yes or
+// --dry-run is what such a run wants.
 func IsTerminal(f *os.File) bool {
-	info, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(int(f.Fd()))
 }
 
 // Confirm asks a yes/no question. Without a terminal it returns def unasked.

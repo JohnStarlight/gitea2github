@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -150,5 +151,37 @@ func TestSelectEmptyAnswerChangesNothing(t *testing.T) {
 	p := NewWith(strings.NewReader("\n"), &strings.Builder{}, true)
 	if got := p.Select("which?", 3); got != nil {
 		t.Errorf("Select = %v, want nil for a bare enter", got)
+	}
+}
+
+// TestIsTerminalRejectsDevNull guards the distinction the whole package leans
+// on. /dev/null is a character device, so the obvious mode-bit shortcut calls
+// it a terminal -- and a run with stdin redirected from it, as under cron or
+// in a container, would then ask its questions into the void instead of
+// stopping with the line that names --yes and --dry-run.
+func TestIsTerminalRejectsDevNull(t *testing.T) {
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Skipf("cannot open %s: %v", os.DevNull, err)
+	}
+	defer devNull.Close()
+
+	if IsTerminal(devNull) {
+		t.Errorf("IsTerminal(%s) = true, want false", os.DevNull)
+	}
+}
+
+// TestIsTerminalRejectsAPipe covers the other way a run arrives without a
+// human: one end of a shell pipeline.
+func TestIsTerminalRejectsAPipe(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("creating a pipe: %v", err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	if IsTerminal(r) {
+		t.Error("IsTerminal(pipe) = true, want false")
 	}
 }
