@@ -26,11 +26,26 @@ type Clone struct {
 	// not exist yet.
 	Blocked string
 
+	// Redacted reports that GitHub holds a rewritten history for this clone,
+	// with the addresses hidden. Such a clone has only one coherent
+	// destination: it takes on the rewritten history and stops being a clone
+	// of the Gitea repository. Pushing to both is not merely unwise but
+	// impossible, and forcing past the refusal would republish the addresses
+	// the rewrite removed.
+	Redacted bool
+
+	// Risk is why this clone cannot safely take on that history -- work that
+	// would be lost. Empty when there is none.
+	Risk string
+
 	// Include is whether this clone is in the run, and Mode is where it will
 	// push afterwards.
 	Include bool
 	Mode    string
 }
+
+// onlyGitHub reports that this clone has no choice of destination.
+func (c Clone) onlyGitHub() bool { return c.Redacted && c.Blocked == "" }
 
 // Rescan looks for working copies under root and returns them as rows. It is
 // supplied by the caller so the model stays free of I/O and can be driven by a
@@ -70,6 +85,15 @@ func NewRelinkModel(clones []Clone, mode, oldName string) *RelinkModel {
 		owned[i].Include = owned[i].Blocked == ""
 		if owned[i].Mode == "" {
 			owned[i].Mode = mode
+		}
+		// A rewritten history admits one destination, so the row is put there
+		// rather than left showing a choice that cannot be made.
+		if owned[i].onlyGitHub() {
+			owned[i].Mode = relink.ModeGitHub
+		}
+		// And one that would lose work is left out until that is dealt with.
+		if owned[i].Risk != "" {
+			owned[i].Include = false
 		}
 	}
 	return &RelinkModel{
@@ -367,6 +391,10 @@ func (m *RelinkModel) toggleCurrent() {
 		m.note = m.clones[i].Display + ": " + m.clones[i].Blocked
 		return
 	}
+	if m.clones[i].Risk != "" && !m.clones[i].Include {
+		m.note = m.clones[i].Display + ": " + m.clones[i].Risk
+		return
+	}
 	m.clones[i].Include = !m.clones[i].Include
 }
 
@@ -378,6 +406,15 @@ func (m *RelinkModel) setMode(mode string) {
 	}
 	if m.clones[i].Blocked != "" {
 		m.note = m.clones[i].Display + ": " + m.clones[i].Blocked
+		return
+	}
+	if m.clones[i].onlyGitHub() && mode != relink.ModeGitHub {
+		m.note = m.clones[i].Display +
+			": GitHub holds a rewritten history; this clone can only take it on"
+		return
+	}
+	if m.clones[i].Risk != "" {
+		m.note = m.clones[i].Display + ": " + m.clones[i].Risk
 		return
 	}
 	m.clones[i].Mode = mode
@@ -395,7 +432,9 @@ func (m *RelinkModel) applyModeToAll() {
 	}
 	mode := m.clones[i].Mode
 	for _, j := range m.visible() {
-		if m.clones[j].Blocked == "" {
+		// A clone whose history was rewritten keeps its one destination
+		// whatever the bulk key says.
+		if m.clones[j].Blocked == "" && !m.clones[j].onlyGitHub() {
 			m.clones[j].Mode = mode
 		}
 	}
@@ -403,10 +442,23 @@ func (m *RelinkModel) applyModeToAll() {
 }
 
 func (m *RelinkModel) setAll(on bool) {
+	held := 0
 	for _, i := range m.visible() {
-		if m.clones[i].Blocked == "" {
-			m.clones[i].Include = on
+		// Clones that would lose work stay out until the work is dealt with;
+		// "select all" is not a way to overrule that.
+		if m.clones[i].Blocked != "" {
+			continue
 		}
+		if on && m.clones[i].Risk != "" {
+			held++
+			continue
+		}
+		m.clones[i].Include = on
+	}
+	// Said rather than done quietly: a key that means "all" leaving something
+	// out is exactly the kind of silence that gets noticed too late.
+	if held > 0 {
+		m.note = fmt.Sprintf("%d clone(s) left out: work would be lost -- move to one to see why", held)
 	}
 }
 
@@ -429,9 +481,13 @@ func (m *RelinkModel) View(header string) string {
 		b.WriteString(ansiBold + header + ansiReset + strings.Repeat(" ", gap) + dim(count) + "\r\n")
 	}
 	b.WriteString(m.destinationBar() + "\r\n")
-	b.WriteString(m.rootBar() + "\r\n\r\n")
+	b.WriteString(m.rootBar() + "\r\n")
+	if warning := m.adoptWarning(); warning != "" {
+		b.WriteString(warning + "\r\n")
+	}
+	b.WriteString("\r\n")
 
-	body := m.height - relinkChrome
+	body := m.height - m.chrome()
 	if body < 3 {
 		body = 3
 	}
@@ -485,6 +541,13 @@ func (m *RelinkModel) destinationBar() string {
 		current = m.clones[i].Mode
 	}
 
+	// A clone whose history was rewritten has one destination, so the other
+	// two are greyed rather than left looking available.
+	locked := false
+	if i := m.currentClone(); i >= 0 {
+		locked = m.clones[i].onlyGitHub()
+	}
+
 	var parts []string
 	for _, d := range []struct{ key, mode string }{
 		{"1", relink.ModeGitHub}, {"2", relink.ModeBoth}, {"3", relink.ModeGitea},
@@ -493,8 +556,12 @@ func (m *RelinkModel) destinationBar() string {
 		if d.mode == current {
 			marker = "[x]"
 		}
+		colour := modeColour(d.mode)
+		if locked && d.mode != relink.ModeGitHub {
+			colour = ansiDim
+		}
 		parts = append(parts, fmt.Sprintf("%s %s%s %s%s",
-			dim(d.key), modeColour(d.mode), marker, modeLabel(d.mode), ansiReset))
+			dim(d.key), colour, marker, modeLabel(d.mode), ansiReset))
 	}
 	return truncateANSI("  "+strings.Join(parts, "   ")+"   "+dim("A all"), m.width)
 }
@@ -564,6 +631,38 @@ func (m *RelinkModel) nameColumn() int {
 	return nameW
 }
 
+// adoptWarning is the line shown when any clone is about to take on a
+// rewritten history.
+//
+// This one is louder than the migration screen's, because it acts on the
+// machine rather than on a server: the commits in the clone are replaced, and
+// the repository it came from stops being reachable from it.
+func (m *RelinkModel) adoptWarning() string {
+	adopting := 0
+	for _, c := range m.clones {
+		if c.Include && c.onlyGitHub() {
+			adopting++
+		}
+	}
+	if adopting == 0 {
+		return ""
+	}
+	full := "  REPLACES LOCAL HISTORY AND DROPS GITEA -- CANNOT BE UNDONE, FINISHED PROJECTS ONLY"
+	short := "  REPLACES LOCAL HISTORY AND DROPS GITEA -- CANNOT BE UNDONE"
+	shortest := "  REPLACES LOCAL HISTORY -- CANNOT BE UNDONE"
+	tiny := "  CANNOT BE UNDONE"
+	return ansiAlarm + pickFitting(m.width, full, short, shortest, tiny) + ansiReset
+}
+
+// relinkChromeFor is relinkChrome plus the warning, which only takes a line
+// while there is something to warn about.
+func (m *RelinkModel) chrome() int {
+	if m.adoptWarning() != "" {
+		return relinkChrome + 1
+	}
+	return relinkChrome
+}
+
 // renderClone draws one working copy, as one line or two.
 //
 // The descriptions say what push and pull will do afterwards, which is longer
@@ -581,8 +680,15 @@ func (m *RelinkModel) renderClone(i int, cursor bool) []string {
 	switch {
 	case c.Blocked != "":
 		colour, symbol, detail = ansiDim, "-", c.Blocked
+	case c.Risk != "":
+		colour, symbol, detail = ansiDim, "-", c.Risk
 	case !c.Include:
 		colour, symbol, detail = ansiDim, " ", "left alone"
+	case c.onlyGitHub():
+		// Red, because this is the one row on either screen that rewrites
+		// what is on the machine rather than what is on a server.
+		colour, symbol, label = ansiAlarm, "*", "adopt"
+		detail = "takes on GitHub's rewritten history; Gitea remote removed"
 	default:
 		colour, symbol = modeColour(c.Mode), "*"
 		label = modeLabel(c.Mode)
@@ -609,17 +715,29 @@ func (m *RelinkModel) renderClone(i int, cursor bool) []string {
 // relinkFooter counts the clones by destination, in the colours of the rows.
 func (m *RelinkModel) relinkFooter() string {
 	counts := map[string]int{}
-	left := 0
+	left, adopting := 0, 0
 	for _, c := range m.clones {
-		if c.Blocked != "" || !c.Include {
+		if c.Blocked != "" || c.Risk != "" || !c.Include {
 			left++
+			continue
+		}
+		if c.onlyGitHub() {
+			// Counted apart from the ordinary destinations: it is not one of
+			// them, and burying it among them is the opposite of the point.
+			adopting++
 			continue
 		}
 		counts[c.Mode]++
 	}
-	total := len(m.clones) - left
+	total := adopting
+	for _, n := range counts {
+		total += n
+	}
 
 	var parts []string
+	if adopting > 0 {
+		parts = append(parts, fmt.Sprintf("%s%d adopting%s", ansiAlarm, adopting, ansiReset))
+	}
 	for _, mode := range []string{relink.ModeGitHub, relink.ModeBoth, relink.ModeGitea} {
 		if counts[mode] > 0 {
 			parts = append(parts, fmt.Sprintf("%s%d %s%s",
@@ -652,7 +770,7 @@ func (m *RelinkModel) relinkFooter() string {
 		hint = dim(truncate("  type a directory, enter to scan it, esc to keep this one", m.width))
 	}
 	if m.note != "" {
-		hint = ansiYellow + truncate(m.note, m.width-2) + ansiReset
+		hint = ansiYellow + "  " + truncate(m.note, m.width-2) + ansiReset
 	}
 	if m.searching {
 		hint = fmt.Sprintf("  search: %s%s%s   %s",

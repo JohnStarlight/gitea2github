@@ -299,6 +299,33 @@ Gitea for audits is not the one you are done with. `A` gives every clone on
 screen the destination of the one under the cursor, and `--push-to` still sets
 them all from the command line.
 
+### Repositories whose history was redacted
+
+Redaction leaves GitHub holding commits that share no ancestor with the clone
+on your machine. That clone cannot push there — git refuses it — and the hint
+git prints in refusing points straight at `--force`, which would republish
+every address the redaction removed.
+
+`relink` recognises those repositories and offers one thing for them: the clone
+takes on GitHub's rewritten history and stops being a clone of the Gitea
+repository. `both` and `gitea` are greyed out, because neither is possible.
+
+```
+ > *  ~/Git/ascii-art   adopt   takes on GitHub's rewritten history; Gitea remote removed
+   -  ~/Git/go-reloaded         2 commits never pushed to Gitea; push them first
+```
+
+The history is fetched from GitHub rather than reproduced locally, so the
+result matches by construction rather than by getting a rewrite exactly right.
+Your working tree is untouched — redaction changes who made a commit, not what
+it contains — and a clone with uncommitted changes, or with commits that never
+reached Gitea, is refused until that is dealt with: once it belongs to GitHub
+it can never push to Gitea again.
+
+This is the one operation either screen offers that rewrites what is on your
+machine, and it cannot be undone. It is right for work that is finished and
+wrong for work that is not.
+
 `relink` opens the same screen on its own, for clones migrated by hand or on
 another machine. With no directory it scans the one you are standing in; give
 it a path to scan somewhere else. The scan changes nothing, and both the screen

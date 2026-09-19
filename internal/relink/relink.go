@@ -87,6 +87,11 @@ type Options struct {
 	// is touched.
 	Only map[string]bool
 
+	// GitEnv carries a credential to the one git command here that talks to a
+	// remote: fetching a rewritten history during an adoption. Supplied by the
+	// caller so this package holds no second copy of that mechanism.
+	GitEnv []string
+
 	// DryRun reports what would change without touching any repository.
 	DryRun bool
 
@@ -174,13 +179,48 @@ func relinkOne(ctx context.Context, path string, gh *github.Client, opts Options
 		}
 	}
 
-	if opts.DryRun {
-		res.Action = "planned"
-		res.Reason = plannedDescription(opts.modeFor(path), opts.OldRemoteName)
+	mode := opts.modeFor(path)
+
+	// A rewritten history admits one outcome. Pushing this clone to the
+	// redacted copy is refused by git, and forcing past that would republish
+	// the addresses the rewrite removed, so the other two modes are not
+	// offered here whatever was asked for.
+	if res.Redacted && mode != ModeGitHub {
+		res.Action = "skipped"
+		res.Reason = "GitHub holds a rewritten history; only --push-to=github is possible"
 		return res
 	}
 
-	switch opts.modeFor(path) {
+	if opts.DryRun {
+		res.Action = "planned"
+		if res.Redacted {
+			res.Reason = "take on GitHub's rewritten history; Gitea remote removed"
+			if risk := CheckAdoptable(ctx, path); risk.Reason != "" {
+				res.Action, res.Reason = "skipped", risk.Reason
+			}
+		} else {
+			res.Reason = plannedDescription(mode, opts.OldRemoteName)
+		}
+		return res
+	}
+
+	if res.Redacted {
+		// Asked again rather than trusted from the plan: the working copy may
+		// have been touched since, and what is checked here is whether work
+		// would be lost.
+		if risk := CheckAdoptable(ctx, path); risk.Reason != "" {
+			res.Action, res.Reason = "skipped", risk.Reason
+			return res
+		}
+		if err := Adopt(ctx, path, res.NewURL, opts.GitEnv, opts.Log); err != nil {
+			res.Action, res.Reason = "failed", err.Error()
+			return res
+		}
+		res.Action, res.Reason = "adopted", "took on the rewritten history; Gitea remote removed"
+		return res
+	}
+
+	switch mode {
 	case ModeGitea:
 		// origin is left exactly as it is; GitHub becomes an extra remote that
 		// has to be named explicitly to be pushed to.

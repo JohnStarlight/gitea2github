@@ -538,3 +538,143 @@ func TestTheColumnHoldsTheLongestDescription(t *testing.T) {
 		}
 	}
 }
+
+// redactedClones is a directory holding one clone whose GitHub copy was
+// rewritten, one ordinary clone, and one rewritten clone that would lose work.
+func redactedClones() []Clone {
+	return []Clone{
+		{Path: "/home/me/Git/done", Display: "~/Git/done", Redacted: true},
+		{Path: "/home/me/Git/active", Display: "~/Git/active"},
+		{Path: "/home/me/Git/unpushed", Display: "~/Git/unpushed", Redacted: true,
+			Risk: "2 commits never pushed to Gitea; push them first"},
+	}
+}
+
+// TestARewrittenHistoryAdmitsOneDestination is the rule the whole flow rests
+// on. Pushing such a clone to the redacted copy is refused by git, and forcing
+// past the refusal republishes the addresses the rewrite removed, so the other
+// two destinations are not choices at all.
+func TestARewrittenHistoryAdmitsOneDestination(t *testing.T) {
+	m := NewRelinkModel(redactedClones(), relink.ModeGitHub, "gitea")
+	m.SetSize(96, 20)
+
+	for _, k := range []rune{'2', '3'} {
+		m.cursor = 0
+		m.Update(Key{Kind: KeyRune, Rune: k})
+		if _, modes := m.Chosen(); modes["/home/me/Git/done"] != relink.ModeGitHub {
+			t.Errorf("pressing %c moved a rewritten clone to %q", k, modes["/home/me/Git/done"])
+		}
+		if m.note == "" {
+			t.Errorf("pressing %c on a rewritten clone said nothing about why", k)
+		}
+	}
+
+	// The ordinary clone beside it is unaffected.
+	m.cursor = 1
+	m.Update(Key{Kind: KeyRune, Rune: '2'})
+	if _, modes := m.Chosen(); modes["/home/me/Git/active"] != relink.ModeBoth {
+		t.Error("an ordinary clone lost its choice of destination")
+	}
+}
+
+// TestBulkSettingSkipsRewrittenClones keeps A from doing what 2 and 3 refuse.
+func TestBulkSettingSkipsRewrittenClones(t *testing.T) {
+	m := NewRelinkModel(redactedClones(), relink.ModeGitHub, "gitea")
+	m.SetSize(96, 20)
+
+	m.cursor = 1
+	m.Update(Key{Kind: KeyRune, Rune: '3'}) // the ordinary one to gitea
+	m.Update(Key{Kind: KeyRune, Rune: 'A'}) // and everything to match
+
+	_, modes := m.Chosen()
+	if modes["/home/me/Git/done"] != relink.ModeGitHub {
+		t.Errorf("A moved a rewritten clone to %q", modes["/home/me/Git/done"])
+	}
+	if modes["/home/me/Git/active"] != relink.ModeGitea {
+		t.Error("A did not reach the ordinary clone")
+	}
+}
+
+// TestCloneThatWouldLoseWorkStaysOut is the safety net in front of the one
+// operation here that can destroy something.
+func TestCloneThatWouldLoseWorkStaysOut(t *testing.T) {
+	m := NewRelinkModel(redactedClones(), relink.ModeGitHub, "gitea")
+	m.SetSize(96, 20)
+
+	only, _ := m.Chosen()
+	if only["/home/me/Git/unpushed"] {
+		t.Fatal("a clone with unpushed commits started in the run")
+	}
+
+	// Neither space nor "select all" is a way to overrule it.
+	m.cursor = 2
+	m.Update(Key{Kind: KeySpace})
+	if only, _ := m.Chosen(); only["/home/me/Git/unpushed"] {
+		t.Error("space put a clone with unpushed commits into the run")
+	}
+	m.Update(Key{Kind: KeyRune, Rune: 'a'})
+	if only, _ := m.Chosen(); only["/home/me/Git/unpushed"] {
+		t.Error("a put a clone with unpushed commits into the run")
+	}
+	if m.note == "" {
+		t.Error("nothing explained why the clone cannot be chosen")
+	}
+}
+
+// TestAdoptionIsDrawnAsTheExceptionItIs covers the appearance: this is the one
+// row on either screen that rewrites what is on the machine.
+func TestAdoptionIsDrawnAsTheExceptionItIs(t *testing.T) {
+	m := NewRelinkModel(redactedClones(), relink.ModeGitHub, "gitea")
+	m.SetSize(96, 20)
+
+	line := strings.Join(m.renderClone(0, false), " ")
+	if !strings.Contains(line, ansiAlarm) {
+		t.Errorf("a clone about to take on a rewritten history is not drawn in alarm red: %q", line)
+	}
+	if got := stripANSI(line); !strings.Contains(got, "adopt") {
+		t.Errorf("the row does not say what will happen: %q", got)
+	}
+
+	warning := stripANSI(m.adoptWarning())
+	if warning == "" {
+		t.Fatal("nothing warns about replacing a local history")
+	}
+	for _, want := range []string{"CANNOT BE UNDONE", "LOCAL HISTORY"} {
+		if !strings.Contains(warning, want) {
+			t.Errorf("the warning is missing %q: %q", want, warning)
+		}
+	}
+	if warning != strings.ToUpper(warning) {
+		t.Errorf("the warning is not in capitals: %q", warning)
+	}
+}
+
+// TestTheWarningGoesWhenNothingIsBeingAdopted keeps it from becoming wallpaper.
+func TestTheWarningGoesWhenNothingIsBeingAdopted(t *testing.T) {
+	m := NewRelinkModel(redactedClones(), relink.ModeGitHub, "gitea")
+	m.SetSize(96, 20)
+	if m.adoptWarning() == "" {
+		t.Fatal("setup: one clone should be adopting")
+	}
+
+	m.cursor = 0
+	m.Update(Key{Kind: KeySpace}) // take it out of the run
+	if got := m.adoptWarning(); got != "" {
+		t.Errorf("the warning is still up with nothing adopting: %q", stripANSI(got))
+	}
+}
+
+// TestAdoptionIsCountedApartFromTheDestinations stops the one irreversible
+// outcome being buried among the ordinary ones.
+func TestAdoptionIsCountedApartFromTheDestinations(t *testing.T) {
+	m := NewRelinkModel(redactedClones(), relink.ModeGitHub, "gitea")
+	m.SetSize(120, 20)
+
+	footer := stripANSI(strings.Split(m.relinkFooter(), "\r\n")[0])
+	if !strings.Contains(footer, "1 adopting") {
+		t.Errorf("the footer does not count the adoption separately: %q", footer)
+	}
+	if !strings.Contains(footer, "2 to repoint") {
+		t.Errorf("the footer total is wrong: %q", footer)
+	}
+}
