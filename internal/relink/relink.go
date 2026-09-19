@@ -273,23 +273,33 @@ func setRemote(ctx context.Context, path, name, url string) error {
 // plannedDescription explains what a dry run would have done, so --dry-run is
 // informative about the chosen mode rather than just listing paths.
 func plannedDescription(mode, oldName string) string {
-	return "would " + Describe(mode, oldName)
+	// No "would" in front: the ACTION column beside it already says whether
+	// this is a plan or something that happened.
+	return Describe(mode, oldName)
 }
 
-// Describe renders what a mode will do to a working copy, in the present
-// tense.
+// Describe says what a mode does to a working copy, in terms of the two
+// commands its owner will actually type.
 //
-// Exported so the selection screen can label its rows with the same words the
-// dry run prints. Two descriptions of the same three modes, kept in separate
+// Naming the remotes that get moved -- "origin goes to GitHub" -- describes
+// the mechanism and leaves the question unanswered: what happens to Gitea, and
+// where does the next push go? Both halves are spelled out here, because the
+// second is the one somebody is deciding on.
+//
+// Exported so the selection screen labels its rows with the same words the dry
+// run prints. Two descriptions of the same three modes, kept in separate
 // packages, would drift the first time one of them was reworded.
 func Describe(mode, oldName string) string {
 	switch mode {
 	case ModeGitea:
-		return "add a github remote, leaving origin on Gitea"
+		// origin is untouched; GitHub becomes an extra remote.
+		return "push and pull stay on Gitea; GitHub added as \"github\""
 	case ModeBoth:
-		return "make one push reach both servers"
+		// origin keeps its Gitea fetch URL and gains both push URLs.
+		return "push reaches both servers; pull still comes from Gitea"
 	default:
-		return "move origin to GitHub, keeping Gitea as " + oldName
+		// origin is renamed, and a new origin points at GitHub.
+		return "push and pull use GitHub; Gitea stays as \"" + oldName + "\""
 	}
 }
 
