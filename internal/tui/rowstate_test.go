@@ -625,3 +625,64 @@ func TestEveryLineFitsAtCommonWidths(t *testing.T) {
 		}
 	}
 }
+
+// TestWideTerminalsAreUsedRatherThanWasted is the complaint this layout
+// answers: the columns were fixed, so a wide window showed names truncated
+// with an ellipsis and descriptions wrapped onto a second line while most of
+// the screen sat empty to the right.
+func TestWideTerminalsAreUsedRatherThanWasted(t *testing.T) {
+	rows := []Row{
+		{Name: "ivogiake/ascii-art-web-stylize", SourcePrivate: true, Private: false},
+		{Name: "zone01/quadchecker-team-project", SourcePrivate: true, Private: false},
+	}
+	for _, w := range []int{100, 120, 160, 200} {
+		m := NewModel(rows, true, true, true, true, "")
+		m.SetSize(w, 30)
+		for i, r := range m.rows {
+			lines := m.renderRow(i, false)
+			if len(lines) != 1 {
+				t.Errorf("at %d columns row %d wrapped onto %d lines", w, i, len(lines))
+			}
+			if got := stripANSI(strings.Join(lines, " ")); !strings.Contains(got, r.Name) {
+				t.Errorf("at %d columns the name was truncated with room to spare: %q", w, got)
+			}
+		}
+	}
+}
+
+// TestNarrowTerminalsStillWrap is the other half: the columns shrink rather
+// than spilling off the edge.
+func TestNarrowTerminalsStillWrap(t *testing.T) {
+	rows := []Row{{Name: "me/a-repository-with-a-long-name", Blocked: "already on GitHub, left untouched"}}
+	m := NewModel(rows, false, false, false, false, "")
+	m.SetSize(46, 20)
+
+	lines := m.renderRow(0, false)
+	if len(lines) < 2 {
+		t.Errorf("at 46 columns the row did not wrap: %q", lines)
+	}
+	for _, l := range lines {
+		if got := visibleWidth(l); got > 46 {
+			t.Errorf("a line is %d columns wide at 46: %q", got, stripANSI(l))
+		}
+	}
+}
+
+// TestOneLongNameDoesNotEatTheScreen keeps a single unusual repository from
+// pushing every description out of view.
+func TestOneLongNameDoesNotEatTheScreen(t *testing.T) {
+	rows := []Row{
+		{Name: strings.Repeat("very-long-", 12) + "name", SourcePrivate: true, Private: true},
+		{Name: "me/short", SourcePrivate: true, Private: true},
+	}
+	m := NewModel(rows, false, false, false, false, "")
+	m.SetSize(200, 20)
+
+	nameW, _ := m.columns()
+	if nameW > 60 {
+		t.Errorf("the name column grew to %d columns for one long name", nameW)
+	}
+	if got := stripANSI(strings.Join(m.renderRow(1, false), " ")); !strings.Contains(got, "create") {
+		t.Errorf("the second row lost its description: %q", got)
+	}
+}
