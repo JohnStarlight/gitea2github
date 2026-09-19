@@ -519,6 +519,51 @@ func (m *RelinkModel) rootBar() string {
 	return truncateANSI(fmt.Sprintf("  %s directory: %s", dim("d"), m.root), m.width)
 }
 
+// nameColumn works out how wide the path column may be.
+//
+// Measured from the paths and the descriptions rather than fixed. A fixed
+// width wastes a wide window -- paths truncated with an ellipsis and
+// descriptions wrapping while half the screen sits empty -- and starves a
+// narrow one.
+func (m *RelinkModel) nameColumn() int {
+	longestPath, longestDetail := 0, 0
+	for _, c := range m.clones {
+		if w := visibleWidth(c.Display); w > longestPath {
+			longestPath = w
+		}
+		detail := c.Blocked
+		if detail == "" {
+			detail = relink.Describe(c.Mode, m.oldName)
+		}
+		if w := visibleWidth(detail); w > longestDetail {
+			longestDetail = w
+		}
+	}
+	// Every mode is one keystroke away, so the column has to stay wide enough
+	// for the longest of them rather than for whatever is shown right now.
+	for _, mode := range []string{relink.ModeGitHub, relink.ModeBoth, relink.ModeGitea} {
+		if w := visibleWidth(relink.Describe(mode, m.oldName)); w > longestDetail {
+			longestDetail = w
+		}
+	}
+
+	const markers = 6 // " > * " and the space after the path
+	const labelW = 7  // "github" and its gap
+	budget := m.width - markers - labelW - 1 - longestDetail
+
+	nameW := longestPath
+	if nameW > budget {
+		nameW = budget
+	}
+	if nameW < 12 {
+		nameW = minInt(12, maxInt(8, m.width/3))
+	}
+	if nameW > 60 {
+		nameW = 60
+	}
+	return nameW
+}
+
 // renderClone draws one working copy, as one line or two.
 //
 // The descriptions say what push and pull will do afterwards, which is longer
@@ -547,13 +592,9 @@ func (m *RelinkModel) renderClone(i int, cursor bool) []string {
 		colour += ansiBold
 	}
 
-	nameW := 30
-	if m.width < 90 {
-		nameW = maxInt(12, m.width/3)
-	}
-	head := fmt.Sprintf(" %s %s %s %s", marker, symbol, pad(c.Display, nameW), pad(label, 7))
+	head := fmt.Sprintf(" %s %s %s %s", marker, symbol, pad(c.Display, m.nameColumn()), pad(label, 7))
 
-	if room := m.width - visibleWidth(head) - 1; room >= len(detail) {
+	if room := m.width - visibleWidth(head) - 1; room >= visibleWidth(detail) {
 		return []string{colour + head + " " + detail + ansiReset}
 	}
 

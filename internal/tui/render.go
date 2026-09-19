@@ -202,11 +202,11 @@ func (m *Model) renderRow(i int, cursor bool) []string {
 	}
 
 	detail := m.detailFor(r, st)
-	room := m.width - len(head) - 1
+	room := m.width - visibleWidth(head) - 1
 	if detail == "" {
 		return []string{colour + strings.TrimRight(head, " ") + ansiReset}
 	}
-	if room >= len(detail) {
+	if room >= visibleWidth(detail) {
 		return []string{colour + head + " " + detail + ansiReset}
 	}
 
@@ -223,24 +223,48 @@ func (m *Model) renderRow(i int, cursor bool) []string {
 
 // columns works out how wide the name and visibility columns may be.
 //
-// Derived from the terminal rather than fixed: at eighty columns a
-// thirty-four-character name column leaves nothing for the reason, and the
-// reason is the whole point of the rows that have one.
+// Measured from the content and the terminal rather than fixed. A fixed width
+// wastes a wide window -- names truncated with an ellipsis and descriptions
+// wrapping onto a second line while ninety columns sit empty to the right --
+// and starves a narrow one.
 func (m *Model) columns() (nameW, visW int) {
-	nameW = 34
-	if m.width < 90 {
-		nameW = maxInt(14, m.width/3)
-	}
-
-	// The visibility column only exists when some row on screen would fill it.
+	// The visibility column only exists when some row would fill it.
+	longestName, longestDetail := 0, 0
 	for _, r := range m.rows {
-		if s := m.rowState(r); s == stateVerbatim || s.changed() {
-			visW = 20
-			break
+		st := m.rowState(r)
+		if visW == 0 && (st == stateVerbatim || st.changed()) {
+			visW = len("private")
+		}
+		if w := visibleWidth(r.Name); w > longestName {
+			longestName = w
+		}
+		if w := visibleWidth(m.detailFor(r, st)); w > longestDetail {
+			longestDetail = w
 		}
 	}
 	if m.width < 70 {
 		visW = 0
+	}
+
+	// What is left once the markers, the gaps, the visibility column and the
+	// longest description have had their share.
+	const markers = 6 // " > * " and the space after the name
+	budget := m.width - markers - longestDetail - 1
+	if visW > 0 {
+		budget -= visW + 1
+	}
+
+	nameW = longestName
+	if nameW > budget {
+		nameW = budget
+	}
+	// Never so narrow that a name is unrecognisable, and never so wide that
+	// one unusually long name pushes every description off the screen.
+	if nameW < 14 {
+		nameW = minInt(14, maxInt(8, m.width/3))
+	}
+	if nameW > 60 {
+		nameW = 60
 	}
 	return nameW, visW
 }
@@ -535,6 +559,13 @@ func stripANSI(s string) string {
 		out.WriteRune(r)
 	}
 	return out.String()
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func maxInt(a, b int) int {

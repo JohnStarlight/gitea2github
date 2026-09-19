@@ -492,3 +492,49 @@ func TestDescriptionsNameTheRemoteAndSaySoItIsOne(t *testing.T) {
 		}
 	}
 }
+
+// TestRelinkUsesAWideTerminal matches the migration screen: on a wide window
+// the paths are shown in full and the descriptions stay on one line.
+func TestRelinkUsesAWideTerminal(t *testing.T) {
+	clones := []Clone{
+		{Path: "/home/me/Git/ascii-art-web-stylize", Display: "~/Git/ascii-art-web-stylize"},
+		{Path: "/home/me/Git/atm-management-system", Display: "~/Git/atm-management-system"},
+	}
+	for _, w := range []int{110, 130, 160, 200} {
+		m := NewRelinkModel(clones, relink.ModeGitea, "gitea")
+		m.SetSize(w, 30)
+		for i, c := range m.clones {
+			lines := m.renderClone(i, false)
+			if len(lines) != 1 {
+				t.Errorf("at %d columns clone %d wrapped onto %d lines", w, i, len(lines))
+			}
+			got := stripANSI(strings.Join(lines, " "))
+			if !strings.Contains(got, c.Display) {
+				t.Errorf("at %d columns the path was truncated with room to spare: %q", w, got)
+			}
+			if want := relink.Describe(c.Mode, "gitea"); !strings.Contains(got, want) {
+				t.Errorf("at %d columns the description was cut: %q", w, got)
+			}
+		}
+	}
+}
+
+// TestTheColumnHoldsTheLongestDescription stops the layout shifting as
+// destinations are cycled: every mode is one keystroke away, so the column has
+// to fit the longest of them rather than whatever is shown right now.
+func TestTheColumnHoldsTheLongestDescription(t *testing.T) {
+	clones := []Clone{{Path: "/home/me/Git/a", Display: "~/Git/a"}}
+
+	var widths []int
+	for _, mode := range []string{relink.ModeGitHub, relink.ModeBoth, relink.ModeGitea} {
+		m := NewRelinkModel(clones, mode, "gitea")
+		m.SetSize(120, 20)
+		widths = append(widths, m.nameColumn())
+	}
+	for _, w := range widths[1:] {
+		if w != widths[0] {
+			t.Errorf("the path column moves as the destination changes: %v", widths)
+			break
+		}
+	}
+}
