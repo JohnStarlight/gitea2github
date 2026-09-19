@@ -125,6 +125,10 @@ writes no config file and keeps no credential of its own. Tokens live in memory
 for the length of the run and are stripped from every line of git output before
 it is printed.
 
+If you pass credentials in `--gitea-url` yourself, they are stripped before
+the address is printed, so a token cannot end up in your scrollback, in a
+screenshot or in a pasted bug report.
+
 Crucially, a token is never spliced into a URL. Doing that is the usual way to
 authenticate git from a program, and it leaks twice: the URL shows up in the
 argument list `ps` publishes to **every** user on the machine, and `git clone`
