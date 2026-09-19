@@ -90,3 +90,43 @@ func TestAskVisibilityFlipsDefaultsToNoChange(t *testing.T) {
 		t.Errorf("overrides = %v, want none for a bare enter", overrides)
 	}
 }
+
+// TestForDisplayStripsCredentials guards the one place a user-supplied secret
+// could reach the screen. Somebody used to authenticating through the URL will
+// eventually pass one, and a token echoed into the scrollback outlives the run.
+func TestForDisplayStripsCredentials(t *testing.T) {
+	cases := map[string]string{
+		// The ordinary case: nothing to hide, nothing changed.
+		"https://platform.zone01.gr/git": "https://platform.zone01.gr/git",
+		"http://localhost:3000":          "http://localhost:3000",
+
+		// Both halves of a credential, and a username on its own.
+		"https://me:ghp_secret@gitea.example.com/git": "https://gitea.example.com/git",
+		"https://me@gitea.example.com/git":            "https://gitea.example.com/git",
+
+		// A token containing characters that survive URL parsing.
+		"https://me:ghp_aB3-_x.y@gitea.example.com": "https://gitea.example.com",
+	}
+	for input, want := range cases {
+		if got := forDisplay(input); got != want {
+			t.Errorf("forDisplay(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+// TestForDisplayNeverLeaksOnMalformedInput is the property that matters more
+// than exact formatting: whatever comes in, no secret comes out.
+func TestForDisplayNeverLeaksOnMalformedInput(t *testing.T) {
+	const secret = "ghp_SUPERSECRET"
+	inputs := []string{
+		"https://me:" + secret + "@gitea.example.com/git",
+		"https://me:" + secret + "@gitea.example.com/git with a space",
+		"://me:" + secret + "@broken",
+		"https://me:" + secret + "@gitea.example.com/git\x7f",
+	}
+	for _, input := range inputs {
+		if got := forDisplay(input); strings.Contains(got, secret) {
+			t.Errorf("forDisplay(%q) leaked the secret: %q", input, got)
+		}
+	}
+}

@@ -171,7 +171,7 @@ func cmdDoctor(ctx context.Context, args []string) error {
 		var authErr *gitea.AuthError
 		switch {
 		case err == nil:
-			ok("reachable", "%s (Gitea %s)", *giteaURL, version)
+			ok("reachable", "%s (Gitea %s)", forDisplay(*giteaURL), version)
 
 			// Listing needs the broadest scope of anything the migrator does,
 			// so probing it here turns a later mysterious 403 into advice.
@@ -345,7 +345,7 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	}
 	sort.Slice(repos, func(i, j int) bool { return repos[i].FullName < repos[j].FullName })
 
-	fmt.Printf("%s -> github.com/%s  (%d repositories visible)\n", *giteaURL, ghLogin, len(repos))
+	fmt.Printf("%s -> github.com/%s  (%d repositories visible)\n", forDisplay(*giteaURL), ghLogin, len(repos))
 
 	// Two routes to the same set of answers. The full-screen selector is the
 	// good one -- nothing is decided until the whole picture is on screen, so
@@ -391,7 +391,7 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		model := tui.NewModel(buildRows(repos, probe, giteaCred.Username),
 			*collabs, *forks, *archived, *redactEmails, seedKeep)
 		answered, screenErr := tui.Run(
-			fmt.Sprintf("%s  ->  github.com/%s", *giteaURL, ghLogin), model)
+			fmt.Sprintf("%s  ->  github.com/%s", forDisplay(*giteaURL), ghLogin), model)
 		if errors.Is(screenErr, tui.ErrCancelled) {
 			fmt.Println("Cancelled; nothing was changed.")
 			return nil
@@ -594,6 +594,34 @@ func printResults(results []migrate.Result) {
 		counts[migrate.StatusMigrated], counts[migrate.StatusExists],
 		counts[migrate.StatusSkipped], counts[migrate.StatusFailed],
 		counts[migrate.StatusPlanned])
+}
+
+// forDisplay strips any credentials from a URL before it is printed.
+//
+// The Gitea address comes from a flag, and somebody who is used to
+// authenticating that way will sooner or later pass
+// https://me:token@gitea.example.com/git. Echoing it back verbatim would put
+// their token in the terminal scrollback, in a screenshot, and in the bug
+// report they paste it into. Nothing else needs the credential -- the API
+// client sends it as a header, and git is handed its own through askpass -- so
+// the display is the only place it could escape from.
+func forDisplay(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		// Unparseable, so the structure cannot be trusted: drop everything up
+		// to an "@" rather than guess which part was the secret.
+		if at := strings.Index(rawURL, "@"); at >= 0 {
+			if slash := strings.Index(rawURL, "//"); slash >= 0 && slash < at {
+				return rawURL[:slash+2] + rawURL[at+1:]
+			}
+		}
+		return rawURL
+	}
+	if parsed.User == nil {
+		return rawURL
+	}
+	parsed.User = nil
+	return parsed.String()
 }
 
 // buildRows turns the repository list and its dry-run probe into the rows the
