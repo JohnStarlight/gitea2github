@@ -94,6 +94,40 @@ type NotFoundError struct{ Path string }
 
 func (e *NotFoundError) Error() string { return "github: not found: " + e.Path }
 
+// TipAuthors returns the author and committer addresses of the most recent
+// commits on a repository's default branch.
+//
+// Used to recognise a repository whose history was rewritten to hide
+// addresses. The result of such a rewrite is the only record that it happened,
+// and a local clone that still holds the original history cannot push to it --
+// so the difference has to be noticed before somebody tries.
+//
+// A handful of commits is enough: redaction applies to a whole history, so if
+// it happened at all it shows on the first commit looked at. More are fetched
+// only to make a single unusual address less likely to decide the answer.
+func (c *Client) TipAuthors(ctx context.Context, owner, name string) ([]string, error) {
+	var commits []struct {
+		Commit struct {
+			Author struct {
+				Email string `json:"email"`
+			} `json:"author"`
+			Committer struct {
+				Email string `json:"email"`
+			} `json:"committer"`
+		} `json:"commit"`
+	}
+	path := fmt.Sprintf("/repos/%s/%s/commits?per_page=10", owner, name)
+	if err := c.do(ctx, http.MethodGet, path, nil, &commits); err != nil {
+		return nil, err
+	}
+
+	var addrs []string
+	for _, c := range commits {
+		addrs = append(addrs, c.Commit.Author.Email, c.Commit.Committer.Email)
+	}
+	return addrs, nil
+}
+
 // CreateRepo creates a repository under the authenticated user's account.
 //
 // Gitea's description is carried over so the migrated repositories do not land
