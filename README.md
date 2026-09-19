@@ -476,6 +476,28 @@ commits stay linked to your GitHub profile.
 committer identities are part of what a commit hashes, and commit signatures are
 dropped. Without the flag, history transfers byte for byte.
 
+`--keep-email` names an address of **yours**. It is rewritten to your GitHub
+no-reply — `<id>+<login>@users.noreply.github.com`, worked out from the account
+the token belongs to — rather than left as it was.
+
+That distinction matters more than it looks. GitHub attributes a commit to an
+account only when its address is one that account has verified, or its
+no-reply. An address merely left alone — a Gitea no-reply, say — is hidden, but
+shows as nobody: no avatar, no link, no contribution graph. Leaving the address
+alone therefore bought attribution only by publishing the real one it was
+supposed to hide.
+
+Rewriting gives both. Several addresses of yours collapse into the one author,
+so a history where you committed from two machines does not arrive as two
+strangers:
+
+```
+you@example.com            -> 259051186+JohnStarlight@users.noreply.github.com
+you@noreply.platform.zone01.gr  -> 259051186+JohnStarlight@users.noreply.github.com
+teammate@example.net             -> 7fe87d38c9@redacted.invalid
+classmate@example.org                -> ff2018ab2f@redacted.invalid
+```
+
 Every replaced address takes the same shape: ten hexadecimal characters, then
 `@redacted.invalid`. The domain is not configurable, for two reasons.
 
@@ -506,7 +528,7 @@ recognised at all.
 | `--visibility` | `mirror` | `mirror` the Gitea setting, or force `private` / `public` |
 | `--jobs` | `4` | Repositories transferred at once |
 | `--redact-emails` | `false` | Replace every email address in the history, in every repository |
-| `--keep-email` | none | Address to leave untouched (repeatable) |
+| `--keep-email` | none | An address of yours, rewritten to your GitHub no-reply (repeatable) |
 
 **relink**
 

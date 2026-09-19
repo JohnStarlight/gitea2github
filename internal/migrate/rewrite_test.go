@@ -66,7 +66,7 @@ func TestRewriteHistoryAgainstRealGit(t *testing.T) {
 	git(src, alice, "tag", "-a", "v1.0", "-m", "release one")
 
 	dst := filepath.Join(tmp, "dst.git")
-	mapper := redact.NewMapper([]string{"carol@example.com"})
+	mapper := redact.NewMapper([]string{"carol@example.com"}, "")
 	if err := rewriteHistory(ctx, src, dst, mapper); err != nil {
 		t.Fatalf("rewriteHistory: %v", err)
 	}

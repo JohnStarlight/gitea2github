@@ -291,7 +291,8 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	noTUI := fs.Bool("no-tui", false, "choose from numbered prompts instead of the full-screen selector")
 	redactEmails := fs.Bool("redact-emails", false, "replace every email address in the history before pushing")
 	var keepEmails stringList
-	fs.Var(&keepEmails, "keep-email", "address to leave untouched when redacting (repeatable)")
+	fs.Var(&keepEmails, "keep-email",
+		"an address of yours, rewritten to your GitHub no-reply instead of a hash (repeatable)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -327,10 +328,11 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		return err
 	}
 	ghClient := github.New(ghCred.Token)
-	ghLogin, err := ghClient.Login(ctx)
+	me, err := ghClient.Identity(ctx)
 	if err != nil {
 		return fmt.Errorf("identifying GitHub user: %w", err)
 	}
+	ghLogin := me.Login
 
 	repos, err := client.ListRepos(ctx)
 	if err != nil {
@@ -468,7 +470,7 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	// to the same replacement address across all of the migrated repositories.
 	var mapper *redact.Mapper
 	if *redactEmails {
-		mapper = redact.NewMapper(keepEmails)
+		mapper = redact.NewMapper(keepEmails, me.NoReply)
 	}
 
 	options := migrate.Options{
@@ -762,7 +764,7 @@ func askExclusions(prompt *ui.Prompter, repos []gitea.Repo, giteaUser string,
 	}
 	if answers.RedactEmails && !given["keep-email"] {
 		answers.KeepEmail = prompt.Line(
-			"  Your own address, to keep linked to GitHub (blank for none):", current.KeepEmail)
+			"  An address of yours, to stay linked to your GitHub profile (blank for none):", current.KeepEmail)
 	} else {
 		answers.KeepEmail = ""
 	}

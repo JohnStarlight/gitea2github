@@ -152,7 +152,7 @@ func TestNoCallSiteSplicesCredentialsIntoAURL(t *testing.T) {
 // means every repository, so an empty one arriving by accident would rewrite
 // the history of a whole account nobody asked about.
 func TestRedactOnlyNarrowsRedactionToTheChosenRepositories(t *testing.T) {
-	mapper := redact.NewMapper(nil)
+	mapper := redact.NewMapper(nil, "")
 
 	cases := []struct {
 		name  string
