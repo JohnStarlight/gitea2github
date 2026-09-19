@@ -496,7 +496,7 @@ func (m *Model) footerLines(tally string) string {
 	var hint string
 	switch {
 	case m.note != "":
-		hint = ansiYellow + truncate(m.note, m.width-2) + ansiReset
+		hint = ansiYellow + "  " + truncate(m.note, m.width-4) + ansiReset
 	case m.editingEmail:
 		hint = dim(truncate("  address to keep unredacted, enter when done", m.width))
 	case m.searching:

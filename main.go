@@ -597,8 +597,9 @@ func offerRelink(ctx context.Context, prompt *ui.Prompter, giteaURL, ghLogin, gh
 	base := relink.Options{
 		GiteaHost: parsed.Host, GitHubUser: ghLogin, GitHubTok: ghToken,
 		OldRemoteName: "gitea", Mode: relink.ModeGitHub, Verify: true,
+		GitEnv: migrate.CredentialEnv("x-access-token", ghToken),
 	}
-	only, modes, chosenRoot, cancelled, screenErr := chooseRelink(
+	only, modes, chosenRoot, cancelled, screenErr := chooseRelink(ctx,
 		probe, relink.ModeGitHub, "gitea", cwd, ghLogin, relinkScanner(ctx, base))
 	switch {
 	case screenErr != nil:
@@ -782,11 +783,11 @@ func forDisplay(rawURL string) string {
 var errScreenCancelled = errors.New("screen cancelled")
 
 // chooseRelink opens the repointing screen and returns what was chosen.
-func chooseRelink(probe []relink.Result, mode, oldName, root, ghLogin string,
+func chooseRelink(ctx context.Context, probe []relink.Result, mode, oldName, root, ghLogin string,
 	rescan tui.Rescan) (
 	only map[string]bool, modes map[string]string, finalRoot string, cancelled bool, err error) {
 
-	clones := clonesFromProbe(probe, mode)
+	clones := clonesFromProbe(ctx, probe, mode)
 
 	model := tui.NewRelinkModel(clones, mode, oldName).WithRoot(shortenPath(root), rescan)
 	header := fmt.Sprintf("github.com/%s", ghLogin)
@@ -821,19 +822,27 @@ func relinkScanner(ctx context.Context, base relink.Options) tui.Rescan {
 		if err != nil {
 			return nil, err
 		}
-		return clonesFromProbe(found, base.Mode), nil
+		return clonesFromProbe(ctx, found, base.Mode), nil
 	}
 }
 
 // clonesFromProbe turns a scan into rows for the screen.
-func clonesFromProbe(probe []relink.Result, mode string) []tui.Clone {
+func clonesFromProbe(ctx context.Context, probe []relink.Result, mode string) []tui.Clone {
 	clones := make([]tui.Clone, 0, len(probe))
 	for _, r := range probe {
-		clone := tui.Clone{Path: r.Path, Display: shortenPath(r.Path), Mode: mode}
+		clone := tui.Clone{
+			Path: r.Path, Display: shortenPath(r.Path), Mode: mode, Redacted: r.Redacted,
+		}
 		// Anything the scan did not mark as planned cannot be repointed by
 		// this run, so the reason it gave is shown instead of a destination.
-		if r.Action != "planned" {
+		switch {
+		case r.Action != "planned":
 			clone.Blocked = r.Reason
+		case r.Redacted:
+			// Only asked of the clones it can matter for. Taking on a
+			// rewritten history is the one operation here that can lose work,
+			// and the screen has to know before it offers it.
+			clone.Risk = relink.CheckAdoptable(ctx, r.Path).Reason
 		}
 		clones = append(clones, clone)
 	}
@@ -1160,7 +1169,7 @@ func cmdRelink(ctx context.Context, args []string) error {
 	switch {
 	case !*noTUI && !*dryRun && !*assumeYes && tui.Available():
 		chosen, modes, chosenRoot, screenErr := func() (map[string]bool, map[string]string, string, error) {
-			c, m, r, cancelled, err := chooseRelink(
+			c, m, r, cancelled, err := chooseRelink(ctx,
 				probe, *pushTo, *oldName, root, ghLogin, relinkScanner(ctx, probeOptions))
 			if cancelled {
 				return nil, nil, "", errScreenCancelled
@@ -1212,6 +1221,7 @@ func cmdRelink(ctx context.Context, args []string) error {
 		Verify:        *verify,
 		Only:          only,
 		ModeFor:       modeFor,
+		GitEnv:        migrate.CredentialEnv("x-access-token", ghCred.Token),
 	}
 
 	// The plan is the scan narrowed to what was chosen. Running the sweep a
