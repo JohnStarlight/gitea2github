@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/JohnStarlight/gitea2github/internal/gitea"
 	"github.com/JohnStarlight/gitea2github/internal/migrate"
 	"github.com/JohnStarlight/gitea2github/internal/ui"
 )
@@ -128,5 +129,128 @@ func TestForDisplayNeverLeaksOnMalformedInput(t *testing.T) {
 		if got := forDisplay(input); strings.Contains(got, secret) {
 			t.Errorf("forDisplay(%q) leaked the secret: %q", input, got)
 		}
+	}
+}
+
+// mixedAccount is the awkward case the questions exist for: one plain
+// repository, one fork, one archived, one belonging to somebody else.
+func mixedAccount() []gitea.Repo {
+	own := func(name string) gitea.Repo {
+		r := gitea.Repo{Name: name, FullName: "me/" + name}
+		r.Owner.Login = "me"
+		return r
+	}
+	plain := own("ascii-art")
+	fork := own("old-mirror")
+	fork.Fork = true
+	attic := own("first-try")
+	attic.Archived = true
+	theirs := gitea.Repo{Name: "groupie", FullName: "zone01/groupie"}
+	theirs.Owner.Login = "zone01"
+	return []gitea.Repo{plain, fork, attic, theirs}
+}
+
+// askAll drives askExclusions with scripted keystrokes and returns the answers
+// together with everything that was printed.
+func askAll(t *testing.T, input string, given map[string]bool, start exclusions) (exclusions, string) {
+	t.Helper()
+	var out strings.Builder
+	prompt := ui.NewWith(strings.NewReader(input), &out, true)
+	if given == nil {
+		given = map[string]bool{}
+	}
+	return askExclusions(prompt, mixedAccount(), "me", given, start), out.String()
+}
+
+// TestAskExclusionsAcceptsEverything walks the whole sequence saying yes, which
+// is the path that widens a migration the most and so the one worth pinning.
+func TestAskExclusionsAcceptsEverything(t *testing.T) {
+	got, _ := askAll(t, "y\ny\ny\ny\nme@example.com\n", nil,
+		exclusions{KeepEmail: "git@example.com"})
+
+	if !got.Collaborations || !got.Forks || !got.Archived || !got.RedactEmails {
+		t.Errorf("answering yes to everything gave %+v", got)
+	}
+	if got.KeepEmail != "me@example.com" {
+		t.Errorf("KeepEmail = %q, want the typed address", got.KeepEmail)
+	}
+}
+
+// TestAskExclusionsDefaultsToExcluding is the safety property: pressing Enter
+// through every question must not publish anybody else's work.
+func TestAskExclusionsDefaultsToExcluding(t *testing.T) {
+	got, _ := askAll(t, "\n\n\n\n\n", nil, exclusions{})
+
+	if got.Collaborations || got.Forks || got.Archived {
+		t.Errorf("bare Enter opted into something: %+v", got)
+	}
+	if got.RedactEmails {
+		t.Error("bare Enter turned redaction on, which rewrites history unasked")
+	}
+}
+
+// TestAskExclusionsSkipsQuestionsAnsweredOnTheCommandLine covers the rule that
+// an explicit flag is a decision, not an opening for a question.
+func TestAskExclusionsSkipsQuestionsAnsweredOnTheCommandLine(t *testing.T) {
+	given := map[string]bool{"collaborations": true, "forks": true, "archived": true}
+	start := exclusions{Collaborations: true, Forks: true, Archived: true}
+
+	// Only the redaction question is left, so one answer is all the input needed.
+	got, printed := askAll(t, "n\n", given, start)
+
+	if !got.Collaborations || !got.Forks || !got.Archived {
+		t.Errorf("a flag set on the command line was overwritten: %+v", got)
+	}
+	for _, unwanted := range []string{"owned by other people", "Include 1 fork", "archived"} {
+		if strings.Contains(printed, unwanted) {
+			t.Errorf("asked about %q although the flag was given:\n%s", unwanted, printed)
+		}
+	}
+}
+
+// TestAskExclusionsStaysSilentAboutCategoriesTheAccountLacks guards the reason
+// the counts are there at all.
+func TestAskExclusionsStaysSilentAboutCategoriesTheAccountLacks(t *testing.T) {
+	plain := gitea.Repo{Name: "solo", FullName: "me/solo"}
+	plain.Owner.Login = "me"
+
+	var out strings.Builder
+	prompt := ui.NewWith(strings.NewReader("n\n"), &out, true)
+	askExclusions(prompt, []gitea.Repo{plain}, "me", map[string]bool{}, exclusions{})
+
+	for _, unwanted := range []string{"fork", "archived", "other people"} {
+		if strings.Contains(strings.ToLower(out.String()), unwanted) {
+			t.Errorf("asked about %q for an account that has none:\n%s", unwanted, out.String())
+		}
+	}
+}
+
+// TestAskExclusionsDropsTheKeptAddressWhenRedactionIsOff stops a stale address
+// reaching redact.NewMapper, where it would be counted as a decision the user
+// never made.
+func TestAskExclusionsDropsTheKeptAddressWhenRedactionIsOff(t *testing.T) {
+	got, _ := askAll(t, "n\nn\nn\nn\n", nil, exclusions{KeepEmail: "git@example.com"})
+
+	if got.RedactEmails {
+		t.Fatal("setup: redaction should be off")
+	}
+	if got.KeepEmail != "" {
+		t.Errorf("KeepEmail = %q with redaction off, want it dropped", got.KeepEmail)
+	}
+}
+
+// TestAskExclusionsNeverBlocksWithoutATerminal is the property the whole ui
+// package exists for, checked through this sequence because this is the one a
+// script actually reaches.
+func TestAskExclusionsNeverBlocksWithoutATerminal(t *testing.T) {
+	var out strings.Builder
+	prompt := ui.NewWith(strings.NewReader(""), &out, false)
+	got := askExclusions(prompt, mixedAccount(), "me", map[string]bool{}, exclusions{})
+
+	if got.Collaborations || got.Forks || got.Archived || got.RedactEmails {
+		t.Errorf("non-interactive run opted into something: %+v", got)
+	}
+	if out.String() != "" {
+		t.Errorf("printed a question with nobody to answer it: %q", out.String())
 	}
 }

@@ -425,33 +425,17 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		// --yes, which means "do not ask me anything".
 		if prompt.Interactive() && !*dryRun && !*assumeYes {
 			fmt.Println()
-			// The three exclusions are only worth asking about when the account
-			// actually contains something they would exclude. Asking "include
-			// forks?" of someone who has none is noise, and noise is what trains
-			// people to stop reading prompts.
-			if n := countMatching(repos, func(r gitea.Repo) bool {
-				return !r.OwnedBy(giteaCred.Username)
-			}); n > 0 && !given["collaborations"] {
-				*collabs = prompt.Confirm(fmt.Sprintf(
-					"Include %d repositor%s owned by other people (group projects)?",
-					n, plural(n, "y", "ies")), false)
-			}
-			if n := countMatching(repos, func(r gitea.Repo) bool { return r.Fork }); n > 0 && !given["forks"] {
-				*forks = prompt.Confirm(fmt.Sprintf(
-					"Include %d fork%s?", n, plural(n, "", "s")), false)
-			}
-			if n := countMatching(repos, func(r gitea.Repo) bool { return r.Archived }); n > 0 && !given["archived"] {
-				*archived = prompt.Confirm(fmt.Sprintf(
-					"Include %d archived repositor%s?", n, plural(n, "y", "ies")), false)
-			}
-
-			if !given["redact-emails"] {
-				*redactEmails = prompt.Confirm("Replace email addresses in the commit history?", *collabs)
-			}
-			if *redactEmails && !given["keep-email"] {
-				if own := prompt.Line("  Your own address, to keep linked to GitHub (blank for none):", gitUserEmail()); own != "" {
-					keepEmails = append(keepEmails, own)
-				}
+			answers := askExclusions(prompt, repos, giteaCred.Username, given, exclusions{
+				Collaborations: *collabs,
+				Forks:          *forks,
+				Archived:       *archived,
+				RedactEmails:   *redactEmails,
+				KeepEmail:      gitUserEmail(),
+			})
+			*collabs, *forks = answers.Collaborations, answers.Forks
+			*archived, *redactEmails = answers.Archived, answers.RedactEmails
+			if !given["keep-email"] {
+				keepEmails = addAddress(keepEmails, answers.KeepEmail)
 			}
 		}
 	}
@@ -594,6 +578,68 @@ func printResults(results []migrate.Result) {
 		counts[migrate.StatusMigrated], counts[migrate.StatusExists],
 		counts[migrate.StatusSkipped], counts[migrate.StatusFailed],
 		counts[migrate.StatusPlanned])
+}
+
+// exclusions carries the answers the numbered prompts collect, in and out.
+//
+// Passed as a struct rather than as five arguments and five results so that a
+// caller cannot silently swap two booleans of the same type, which is exactly
+// the mistake that would widen a migration without anyone noticing.
+type exclusions struct {
+	Collaborations bool
+	Forks          bool
+	Archived       bool
+	RedactEmails   bool
+	KeepEmail      string
+}
+
+// askExclusions runs the question sequence used when the selection screen is
+// not available, returning the answers.
+//
+// Separated from cmdMigrate so the sequence can be driven by a test: this is
+// the path every script, every CI job and every --no-tui run takes, and until
+// it was extracted nothing exercised it end to end.
+//
+// A question is only asked when the account actually contains something it
+// would exclude, and never when the flag was given explicitly: asking "include
+// forks?" of somebody who has none is noise, and noise is what trains people
+// to stop reading prompts. Anything the user set on the command line is their
+// decision and must not be second-guessed by a question.
+func askExclusions(prompt *ui.Prompter, repos []gitea.Repo, giteaUser string,
+	given map[string]bool, current exclusions) exclusions {
+
+	answers := current
+
+	if n := countMatching(repos, func(r gitea.Repo) bool {
+		return !r.OwnedBy(giteaUser)
+	}); n > 0 && !given["collaborations"] {
+		answers.Collaborations = prompt.Confirm(fmt.Sprintf(
+			"Include %d repositor%s owned by other people (group projects)?",
+			n, plural(n, "y", "ies")), false)
+	}
+	if n := countMatching(repos, func(r gitea.Repo) bool { return r.Fork }); n > 0 && !given["forks"] {
+		answers.Forks = prompt.Confirm(fmt.Sprintf(
+			"Include %d fork%s?", n, plural(n, "", "s")), false)
+	}
+	if n := countMatching(repos, func(r gitea.Repo) bool { return r.Archived }); n > 0 && !given["archived"] {
+		answers.Archived = prompt.Confirm(fmt.Sprintf(
+			"Include %d archived repositor%s?", n, plural(n, "y", "ies")), false)
+	}
+
+	if !given["redact-emails"] {
+		// Defaulted to the collaborations answer: a repository with other
+		// people's commits in it is the case where publishing addresses
+		// matters most.
+		answers.RedactEmails = prompt.Confirm(
+			"Replace email addresses in the commit history?", answers.Collaborations)
+	}
+	if answers.RedactEmails && !given["keep-email"] {
+		answers.KeepEmail = prompt.Line(
+			"  Your own address, to keep linked to GitHub (blank for none):", current.KeepEmail)
+	} else {
+		answers.KeepEmail = ""
+	}
+	return answers
 }
 
 // forDisplay strips any credentials from a URL before it is printed.
