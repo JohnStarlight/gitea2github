@@ -50,6 +50,14 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Answer git's credential prompt and exit. Checked before the subcommands
+	// because git invokes this binary with a prompt string as its only
+	// argument, which matches no subcommand and must not reach usage().
+	if os.Getenv(migrate.AskpassEnv) != "" {
+		migrate.Askpass(os.Args[1:], os.Stdout)
+		return
+	}
+
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)

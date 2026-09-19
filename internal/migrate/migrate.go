@@ -13,7 +13,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -231,9 +230,12 @@ func migrateOne(ctx context.Context, repo gitea.Repo, gh *github.Client, opts Op
 
 	// --- Mirror clone ------------------------------------------------------
 	mirrorPath := filepath.Join(workDir, strings.ReplaceAll(repo.FullName, "/", "_")+".git")
-	cloneURL := withCredentials(repo.CloneURL, opts.GiteaUser, opts.GiteaToken)
 	opts.Log("cloning %s", repo.FullName)
-	if out, err := runGit(ctx, "", opts.GiteaToken, "clone", "--mirror", cloneURL, mirrorPath); err != nil {
+	// Cloned from the address as it stands, with the credential supplied out
+	// of band: a token spliced into this URL would be copied into the mirror's
+	// own config by git, and left there if the run were interrupted.
+	if out, err := runGitAs(ctx, "", opts.GiteaUser, opts.GiteaToken,
+		"clone", "--mirror", repo.CloneURL, mirrorPath); err != nil {
 		return finish(StatusFailed, fmt.Sprintf("clone failed: %v: %s", err, out))
 	}
 	// The mirror is scratch data; remove it as soon as the push is done so a
@@ -270,47 +272,69 @@ func migrateOne(ctx context.Context, repo gitea.Repo, gh *github.Client, opts Op
 	}
 
 	// --- Mirror push -------------------------------------------------------
-	pushURL := withCredentials(created.CloneURL, "x-access-token", opts.GitHubTok)
 	opts.Log("pushing %s", repo.FullName)
-	if out, err := runGit(ctx, pushFrom, opts.GitHubTok, "push", "--mirror", pushURL); err != nil {
+	// "x-access-token" is the username GitHub expects when the password being
+	// offered is a personal access token.
+	if out, err := runGitAs(ctx, pushFrom, "x-access-token", opts.GitHubTok,
+		"push", "--mirror", created.CloneURL); err != nil {
 		return finish(StatusFailed, fmt.Sprintf("push failed: %v: %s", err, out))
 	}
 
 	return finish(StatusMigrated, "")
 }
 
-// withCredentials injects basic-auth credentials into an https clone URL so git
-// can authenticate without an interactive prompt and without touching the
-// user's credential store.
-//
-// The resulting string contains a secret, so it must never be logged; runGit
-// redacts it from any command output before that output reaches the caller.
-func withCredentials(rawURL, user, token string) string {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return rawURL
-	}
-	u.User = url.UserPassword(user, token)
-	return u.String()
-}
-
 // runGit executes a git command with prompting disabled and returns its
 // combined output with the secret redacted.
 //
-// GIT_TERMINAL_PROMPT=0 and the empty GIT_ASKPASS matter more than they look:
-// without them a bad token makes git block forever waiting for a password that
-// no one is there to type, and a background worker hanging silently is far
-// harder to diagnose than a failed command.
+// Most git commands here need no credential at all -- they operate on a local
+// mirror -- so this is the common case, and runGitAs is the one that has a
+// token to offer.
 func runGit(ctx context.Context, dir, secret string, args ...string) (string, error) {
+	return runGitAs(ctx, dir, "", secret, args...)
+}
+
+// runGitAs is runGit with a credential offered to git through GIT_ASKPASS.
+//
+// The credential reaches git through the helper's environment rather than
+// through the URL, which is what keeps it out of the argument list `ps`
+// publishes and out of the config file a clone writes. See Askpass.
+func runGitAs(ctx context.Context, dir, user, secret string, args ...string) (string, error) {
+	// No argument may carry the credential. Keeping it out of the argument
+	// list is the whole point of going through a helper -- `ps` publishes
+	// arguments to every user on the machine, and git writes a clone URL into
+	// the clone's own config -- so the invariant is checked here rather than
+	// trusted to every call site. Splicing a token into a URL is the obvious
+	// way to authenticate git from a program, which makes it the change most
+	// likely to be made by someone simplifying this later, and it would
+	// otherwise fail silently by working.
+	if secret != "" {
+		for _, arg := range args {
+			if strings.Contains(arg, secret) {
+				return "", fmt.Errorf(
+					"refusing to run git with a credential among its arguments: " +
+						"pass it through askpass instead")
+			}
+		}
+	}
+
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"GIT_TERMINAL_PROMPT=0",
-		"GIT_ASKPASS=",
-		"GCM_INTERACTIVE=never",
-	)
-	out, err := cmd.CombinedOutput()
-	return redactSecret(string(out), secret), err
+
+	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never")
+	self, err := os.Executable()
+	switch {
+	case secret == "", err != nil:
+		// Nothing to offer, or no way to point git back at this binary. Empty
+		// the helper so that git cannot go looking for a credential
+		// interactively and hang a worker nobody is watching.
+		env = append(env, "GIT_ASKPASS=")
+	default:
+		env = append(env, askpassEnv(self, user, secret)...)
+	}
+	cmd.Env = env
+
+	out, runErr := cmd.CombinedOutput()
+	return redactSecret(string(out), secret), runErr
 }
 
 // redactSecret removes a token from text destined for logs or error messages.
