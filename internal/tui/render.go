@@ -31,7 +31,7 @@ const (
 func (m *Model) View(header string) string {
 	var b strings.Builder
 
-	b.WriteString(ansiBold + truncateANSI(header, m.width) + ansiReset + "\r\n")
+	b.WriteString(m.headerLine(header) + "\r\n")
 	b.WriteString(m.gateBar() + "\r\n")
 	b.WriteString(m.redactBar() + "\r\n\r\n")
 
@@ -285,24 +285,46 @@ func wrapText(s string, width int) []string {
 func (m *Model) footer() string {
 	t := m.tally()
 
-	// Each count is drawn in the colour of the rows it counts, which turns the
-	// footer into the legend for the list above it -- no separate key to read,
-	// and nothing to fall out of step with the rows.
-	parts := []string{fmt.Sprintf("%s%d verbatim%s", ansiGreen, t.Verbatim, ansiReset)}
-	if t.Modified > 0 {
-		parts = append(parts, fmt.Sprintf("%s%d modified%s", ansiAmber, t.Modified, ansiReset))
+	// The counts read as arithmetic rather than as a row of independent
+	// figures: "30 to migrate -> 20 unchanged + 10 with changes" can be
+	// checked at a glance, where four separate numbers have to be reconciled
+	// by the reader. Each is drawn in the colour of the rows it counts, so the
+	// footer is the key to the list above it.
+	var head string
+	switch {
+	case t.Migrating() == 0:
+		head = ansiBold + "nothing to migrate" + ansiReset
+	case t.Modified == 0:
+		// "+ 0 with changes" is noise; say the useful thing instead.
+		head = fmt.Sprintf("%s%d to migrate%s, %sall unchanged%s",
+			ansiBold, t.Migrating(), ansiReset, ansiGreen, ansiReset)
+	case t.Verbatim == 0:
+		head = fmt.Sprintf("%s%d to migrate%s, %sall with changes%s",
+			ansiBold, t.Migrating(), ansiReset, ansiAmber, ansiReset)
+	default:
+		head = fmt.Sprintf("%s%d to migrate%s -> %s%d unchanged%s + %s%d with changes%s",
+			ansiBold, t.Migrating(), ansiReset,
+			ansiGreen, t.Verbatim, ansiReset,
+			ansiAmber, t.Modified, ansiReset)
 	}
-	if t.Available > 0 {
-		parts = append(parts, fmt.Sprintf("%s%d available%s", ansiCyan, t.Available, ansiReset))
-	}
-	parts = append(parts, fmt.Sprintf("%s%d untouched%s", ansiDim, t.Inert, ansiReset))
 
-	tally := fmt.Sprintf("  %s%d to migrate%s   %s",
-		ansiBold, t.Migrating(), ansiReset, strings.Join(parts, "   "))
+	// A category with nothing in it is left out rather than shown as a zero.
+	var rest []string
+	if t.Available > 0 {
+		rest = append(rest, fmt.Sprintf("%s%d could add%s", ansiCyan, t.Available, ansiReset))
+	}
+	if t.Inert > 0 {
+		rest = append(rest, fmt.Sprintf("%s%d not moving%s", ansiDim, t.Inert, ansiReset))
+	}
+
+	tally := "  " + head
+	if len(rest) > 0 {
+		tally += "   " + strings.Join(rest, "   ")
+	}
 	if len(stripANSI(tally)) > m.width {
 		// On a narrow terminal the count that matters is the one about to be
 		// acted on; the breakdown is reassurance, not information.
-		tally = fmt.Sprintf("  %s%d to migrate%s", ansiBold, t.Migrating(), ansiReset)
+		tally = "  " + head
 	}
 
 	var hint string
@@ -327,6 +349,24 @@ func (m *Model) footer() string {
 	b.WriteString(truncateANSI(tally, m.width) + "\r\n")
 	b.WriteString(truncateANSI(hint, m.width))
 	return b.String()
+}
+
+// headerLine draws the route and how many repositories are in play.
+//
+// The total belongs here rather than in the footer because it does not change
+// as gates and checkboxes are toggled: the footer is for what the next
+// keystroke affects, and mixing a standing fact into it made the line too wide
+// for an eighty-column terminal.
+func (m *Model) headerLine(header string) string {
+	count := fmt.Sprintf("%d repositories", len(m.rows))
+	if len(m.rows) == 1 {
+		count = "1 repository"
+	}
+	gap := m.width - len(header) - len(count) - 2
+	if gap < 2 {
+		return ansiBold + truncateANSI(header, m.width) + ansiReset
+	}
+	return ansiBold + header + ansiReset + strings.Repeat(" ", gap) + dim(count)
 }
 
 func checkbox(on bool) string {
