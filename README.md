@@ -180,7 +180,7 @@ after reading the plan costs a keystroke rather than a restart:
 ```
  gitea.zone01.gr  ->  github.com/ivogiake                        40 repositories
    1 [ ] group projects (1)   2 [ ] forks (1)   3 [ ] archived (1)
-   e [x] redact emails   m keep: you@example.com
+   e redacting 2 of 4   E all   m keep: you@example.com
 
  > *  ivogiake/ascii-art       private   create, emails redacted      ← amber
    *  ivogiake/go-reloaded     private   create, emails redacted      ← amber
@@ -189,7 +189,7 @@ after reading the plan costs a keystroke rather than a restart:
    +  ivogiake/old-mirror                a fork (press 2)             ← cyan
    +  zone01/groupie-tracker             a group project (press 1)    ← cyan
 
-   30 to migrate -> 20 unchanged + 4 visibility + 5 redacted + 1 both   6 could add
+   30 to migrate -> 20 unchanged + 4 visibility + 5 redacted + 1 visibility & redacted
    space select   v visibility   a all   n none   / search   enter migrate   q quit
 ```
 
@@ -205,10 +205,12 @@ of the list can be read at a glance rather than one row at a time:
 | Cyan | `+` | Held back only by a closed gate: one keystroke away |
 | Grey | `-` | Nothing will happen to it — already on GitHub, empty, or unchecked |
 
-The two kinds of change are kept apart because they are not alike: redaction is
-global — one keystroke rewrites every history in the run — while visibility is
-decided row by row. A row that has had both done to it is a third thing again,
-and the one most worth a second look.
+Both changes are chosen one repository at a time. Redaction used to be a single
+switch over the whole run, which meant that opening a gate or checking one more
+box silently rewrote the history of whatever it brought in — a side effect on
+the one operation that cannot be undone by unchecking a box afterwards. `E`
+still applies it to everything at once when that is what you want, and undoes
+itself when pressed again.
 
 The counts along the bottom read as arithmetic rather than as a row of
 independent figures — `20 + 10 = 30` can be checked at a glance — and are drawn
@@ -241,7 +243,8 @@ reads in a monochrome terminal or to someone who cannot separate the hues.
 | `v` | Flip that repository between public and private |
 | `a` / `n` | Include or exclude everything on screen |
 | `1` `2` `3` | Include group projects / forks / archived |
-| `e` / `m` | Redact email addresses / choose the address to keep |
+| `e` / `E` | Redact this repository's history / all of them |
+| `m` | Choose the address to keep linked to your GitHub account |
 | `/` | Search by name — filters the view, never the selection |
 | `enter` | Go on to the final confirmation |
 | `q` / `esc` | Quit, changing nothing |
@@ -377,7 +380,7 @@ dropped. Without the flag, history transfers byte for byte.
 | `--archived` | `false` | Also migrate archived repositories |
 | `--visibility` | `mirror` | `mirror` the Gitea setting, or force `private` / `public` |
 | `--jobs` | `4` | Repositories transferred at once |
-| `--redact-emails` | `false` | Replace every email address in the history |
+| `--redact-emails` | `false` | Replace every email address in the history, in every repository |
 | `--keep-email` | none | Address to leave untouched (repeatable) |
 | `--redact-domain` | `redacted.invalid` | Domain for redacted addresses |
 

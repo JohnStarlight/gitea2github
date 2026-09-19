@@ -78,18 +78,17 @@ func (m *Model) Update(k Key) {
 		m.archived = !m.archived
 		m.setCategory(func(r Row) bool { return r.Archived }, m.archived)
 	case 'e':
-		m.redact = !m.redact
-		if !m.redact {
-			// The kept address only means something while redaction is on;
-			// leaving it set would resurrect it if redaction were switched
-			// back on later, which is not something the user asked for.
-			m.keepEmail = ""
-		}
+		m.redactCurrent()
+	case 'E':
+		// Everything on screen, the way a is to space. Rewriting history is
+		// worth asking for explicitly rather than having it follow whatever
+		// else the selection happens to pick up.
+		m.redactAll()
 	case 'm':
-		if m.redact {
+		if m.Redact() {
 			m.editingEmail = true
 		} else {
-			m.note = "turn redaction on with e before choosing an address to keep"
+			m.note = "redact a repository with e before choosing an address to keep"
 		}
 	case '/':
 		m.searching = true
@@ -198,6 +197,60 @@ func (m *Model) toggleCurrent() {
 		return
 	}
 	m.rows[i].Include = !m.rows[i].Include
+}
+
+// redactCurrent turns history rewriting on or off for the row under the
+// cursor.
+func (m *Model) redactCurrent() {
+	i := m.currentRow()
+	if i < 0 {
+		return
+	}
+	r := m.rows[i]
+	if r.Blocked != "" {
+		m.note = r.Name + ": " + r.Blocked
+		return
+	}
+	if !r.eligible(m.groups, m.forks, m.archived) {
+		m.note = r.Name + ": " + gateHint(r, m.groups, m.forks, m.archived)
+		return
+	}
+	m.rows[i].Redact = !m.rows[i].Redact
+	m.forgetAddressIfUnused()
+}
+
+// redactAll turns history rewriting on for everything the search is showing,
+// or off again if it is already on for all of them.
+//
+// Toggling on the whole set rather than only ever switching it on means the
+// key can undo itself, which matters for the one setting that rewrites commits.
+func (m *Model) redactAll() {
+	var eligible []int
+	allOn := true
+	for _, i := range m.visible() {
+		if !m.rows[i].eligible(m.groups, m.forks, m.archived) {
+			continue
+		}
+		eligible = append(eligible, i)
+		if !m.rows[i].Redact {
+			allOn = false
+		}
+	}
+	for _, i := range eligible {
+		m.rows[i].Redact = !allOn
+	}
+	m.forgetAddressIfUnused()
+}
+
+// forgetAddressIfUnused drops the kept address once nothing is being redacted.
+//
+// It only means something while some history is being rewritten, and leaving
+// it set would resurrect it the next time redaction was switched on, which is
+// not something the user asked for.
+func (m *Model) forgetAddressIfUnused() {
+	if !m.Redact() {
+		m.keepEmail = ""
+	}
 }
 
 // flipCurrent inverts the destination visibility of the row under the cursor.

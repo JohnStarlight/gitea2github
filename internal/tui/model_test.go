@@ -189,9 +189,9 @@ func TestQuitAndCtrlCCancel(t *testing.T) {
 
 func TestRedactionTogglesAndClearsTheKeptAddress(t *testing.T) {
 	m := NewModel(sample(), false, false, false, true, "me@example.com")
-	m.press(keys("e")...) // off
+	m.press(keys("E")...) // off, everything at once
 	if m.Redact() {
-		t.Fatal("e did not turn redaction off")
+		t.Fatal("E did not turn redaction off")
 	}
 	if m.KeepEmail() != "" {
 		t.Errorf("turning redaction off kept the address %q", m.KeepEmail())

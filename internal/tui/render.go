@@ -136,17 +136,32 @@ func (m *Model) gateBar() string {
 // long, and an address silently truncated off the edge of the screen is how
 // somebody ends up publishing the one they meant to keep private.
 func (m *Model) redactBar() string {
-	// Amber, because amber is what it makes the rows: this is the one
-	// keystroke that changes what lands on GitHub, and the toggle says so in
-	// the colour the list will take.
-	colour := ansiDim
-	if m.redact {
-		colour = ansiBrightRedacted
+	redacted, selected := 0, 0
+	for _, r := range m.rows {
+		if !r.eligible(m.groups, m.forks, m.archived) || !r.Include {
+			continue
+		}
+		selected++
+		if r.Redact {
+			redacted++
+		}
 	}
-	line := fmt.Sprintf("  %s %s%s redact emails%s", dim("e"), colour, checkbox(m.redact), ansiReset)
-	if !m.redact {
-		return truncateANSI(line, m.width)
+
+	// A count rather than a checkbox, because redaction is no longer one
+	// switch over the whole run: the useful fact is how much of the selection
+	// it currently reaches.
+	if redacted == 0 {
+		return truncateANSI(fmt.Sprintf("  %s redact emails on a repository   %s all",
+			dim("e"), dim("E")), m.width)
 	}
+
+	scope := fmt.Sprintf("%d of %d", redacted, selected)
+	if redacted == selected {
+		scope = fmt.Sprintf("all %d", selected)
+	}
+	line := fmt.Sprintf("  %s %sredacting %s%s   %s all",
+		dim("e"), ansiBrightRedacted, scope, ansiReset, dim("E"))
+
 	if m.editingEmail {
 		return truncateANSI(fmt.Sprintf("%s   %s keep: %s%s%s",
 			line, dim("m"), ansiReverse, m.keepEmail+" ", ansiReset), m.width)
@@ -245,7 +260,7 @@ func (m *Model) detailFor(r Row, st state) string {
 		if r.Private != r.SourcePrivate {
 			changes = append(changes, "now "+visibilityName(r.Private))
 		}
-		if m.redact {
+		if r.Redact {
 			changes = append(changes, "emails redacted")
 		}
 		return "create, " + strings.Join(changes, ", ")
@@ -336,7 +351,7 @@ func (m *Model) countSentence(t tally, detail bool) string {
 		buckets = append(buckets,
 			bucket{t.Visibility, "visibility", ansiVisibility},
 			bucket{t.Redacted, "redacted", ansiRedacted},
-			bucket{t.BothWays, "both", ansiBothWays})
+			bucket{t.BothWays, "visibility & redacted", ansiBothWays})
 	} else {
 		buckets = append(buckets, bucket{t.Changed(), "with changes", ansiBothWays})
 	}
@@ -375,8 +390,8 @@ func (m *Model) footerLines(tally string) string {
 	default:
 		// Shortened rather than truncated as the terminal narrows: a hint cut
 		// off mid-word is worse than a shorter list of hints.
-		full := "  space select   v visibility   a all   n none   / search   enter migrate   q quit"
-		medium := "  space   v vis   a/n all/none   / search   enter go   q quit"
+		full := "  space select   v visibility   e redact   a/n all/none   / search   enter migrate   q quit"
+		medium := "  space   v vis   e redact   a/n all   / search   enter go   q quit"
 		short := "  enter go   q quit"
 		hint = dim(pickFitting(m.width, full, medium, short))
 	}

@@ -51,7 +51,7 @@ func TestEachKindOfChangeIsItsOwnState(t *testing.T) {
 		t.Errorf("a row flipped to public is %v, want stateVisibility", got)
 	}
 
-	m.redact = true
+	m.rows[0].Redact = true
 	if got := m.rowState(m.rows[0]); got != stateBothWays {
 		t.Errorf("a row both flipped and redacted is %v, want stateBothWays", got)
 	}
@@ -112,7 +112,7 @@ func TestPaletteChoiceReadsTheEnvironment(t *testing.T) {
 	}
 }
 
-// TestRedactionRepaintsTheWholeList checks the feedback that makes pressing e
+// TestRedactionRepaintsTheWholeList checks the feedback that makes pressing E
 // impossible to miss: every repository being migrated changes colour at once.
 func TestRedactionRepaintsTheWholeList(t *testing.T) {
 	m := NewModel(stateRows(), true, true, true, false, "")
@@ -121,7 +121,7 @@ func TestRedactionRepaintsTheWholeList(t *testing.T) {
 		t.Fatalf("setup: expected everything verbatim, got %+v", before)
 	}
 
-	m.Update(Key{Kind: KeyRune, Rune: 'e'})
+	m.Update(Key{Kind: KeyRune, Rune: 'E'})
 	after := m.tally()
 	if after.Verbatim != 0 {
 		t.Errorf("after redaction %d rows are still verbatim, want none", after.Verbatim)
@@ -258,7 +258,7 @@ func TestFooterCollapsesWhenThereIsNothingToSplit(t *testing.T) {
 		t.Errorf("with nothing modified the footer is %q, want it collapsed", got)
 	}
 
-	m.Update(Key{Kind: KeyRune, Rune: 'e'})
+	m.Update(Key{Kind: KeyRune, Rune: 'E'})
 	if got := footerText(m); !strings.Contains(got, "all redacted") || strings.Contains(got, "+") {
 		t.Errorf("with everything redacted the footer is %q, want it collapsed", got)
 	}
@@ -413,7 +413,7 @@ func TestRedactionToggleIsDrawnInTheColourItProduces(t *testing.T) {
 	if bar := m.redactBar(); strings.Contains(bar, ansiBrightRedacted) {
 		t.Errorf("redaction is off but its toggle is amber: %q", bar)
 	}
-	m.Update(Key{Kind: KeyRune, Rune: 'e'})
+	m.Update(Key{Kind: KeyRune, Rune: 'E'})
 	if bar := m.redactBar(); !strings.Contains(bar, ansiBrightRedacted) {
 		t.Errorf("redaction is on but its toggle is not amber: %q", bar)
 	}
@@ -440,4 +440,102 @@ func gateSegment(t *testing.T, bar, label string) string {
 		end = len(bar) - idx
 	}
 	return bar[start : idx+end]
+}
+
+// TestRedactionDoesNotSpreadToRowsAddedLater is the reason redaction moved
+// onto the row. With one switch over the whole run, opening a gate or checking
+// one more box silently rewrote the history of whatever came with it -- a
+// side effect nobody asked for, on the one operation that cannot be undone by
+// unchecking a box afterwards.
+func TestRedactionDoesNotSpreadToRowsAddedLater(t *testing.T) {
+	rows := []Row{
+		{Name: "me/plain", SourcePrivate: true, Private: true},
+		{Name: "me/fork", Fork: true, SourcePrivate: true, Private: true},
+	}
+	m := NewModel(rows, false, false, false, false, "")
+
+	// Redact the one repository currently in the run.
+	m.Update(Key{Kind: KeyRune, Rune: 'e'})
+	if got := m.RedactedRepos(); len(got) != 1 || !got["me/plain"] {
+		t.Fatalf("e redacted %v, want just me/plain", got)
+	}
+
+	// Now bring the fork in. It must arrive unredacted.
+	m.Update(Key{Kind: KeyRune, Rune: '2'})
+	got := m.RedactedRepos()
+	if got["me/fork"] {
+		t.Error("opening a gate redacted the repository it brought in")
+	}
+	if !got["me/plain"] {
+		t.Error("opening a gate dropped the redaction that had been asked for")
+	}
+}
+
+// TestRedactAllCoversTheSelectionAndUndoesItself keeps the bulk key usable in
+// both directions: the one setting that rewrites commits must be as easy to
+// take back as it is to apply.
+func TestRedactAllCoversTheSelectionAndUndoesItself(t *testing.T) {
+	m := NewModel(stateRows(), true, true, true, false, "")
+
+	m.Update(Key{Kind: KeyRune, Rune: 'E'})
+	first := len(m.RedactedRepos())
+	if first == 0 {
+		t.Fatal("E redacted nothing")
+	}
+	if first != m.tally().Migrating() {
+		t.Errorf("E redacted %d of %d repositories in the run", first, m.tally().Migrating())
+	}
+
+	m.Update(Key{Kind: KeyRune, Rune: 'E'})
+	if got := m.RedactedRepos(); got != nil {
+		t.Errorf("pressing E twice left %v redacted", got)
+	}
+}
+
+// TestRedactedReposIsNilRatherThanEmpty guards the distinction the migrator
+// draws: a nil map there means every repository, so an empty one would redact
+// the whole run when nothing was asked for.
+func TestRedactedReposIsNilRatherThanEmpty(t *testing.T) {
+	m := NewModel(stateRows(), false, false, false, false, "")
+	if got := m.RedactedRepos(); got != nil {
+		t.Errorf("RedactedRepos = %v with nothing redacted, want nil", got)
+	}
+	if m.Redact() {
+		t.Error("Redact reports true with nothing redacted")
+	}
+}
+
+// TestRedactionIgnoresRowsThatAreNotComing stops a repository that is not in
+// the run from being counted, which would build a Mapper for nothing.
+func TestRedactionIgnoresRowsThatAreNotComing(t *testing.T) {
+	m := NewModel(stateRows(), true, true, true, true, "")
+	if got := m.RedactedRepos(); got["me/attic"] {
+		t.Error("a repository already on GitHub was listed for redaction")
+	}
+
+	// Unchecking a row takes it out of the redaction list too.
+	m.cursor = 0
+	name := m.rows[0].Name
+	m.Update(Key{Kind: KeySpace})
+	if got := m.RedactedRepos(); got[name] {
+		t.Errorf("%s is still listed for redaction after being unchecked", name)
+	}
+}
+
+// TestFooterNamesBothChangesRatherThanSayingBoth is the wording fix: "both"
+// made the reader work out what the two were, and only by toggling one off.
+func TestFooterNamesBothChangesRatherThanSayingBoth(t *testing.T) {
+	m := NewModel(stateRows(), true, true, true, false, "")
+	m.SetSize(120, 24)
+	m.Update(Key{Kind: KeyRune, Rune: 'E'}) // redact everything
+	m.cursor = 0
+	m.Update(Key{Kind: KeyRune, Rune: 'v'}) // and flip one
+
+	got := footerText(m)
+	if strings.Contains(got, " both") && !strings.Contains(got, "visibility & redacted") {
+		t.Errorf("footer %q still says \"both\" without naming the changes", got)
+	}
+	if !strings.Contains(got, "visibility & redacted") {
+		t.Errorf("footer %q does not name the two changes", got)
+	}
 }

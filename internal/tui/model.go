@@ -40,6 +40,14 @@ type Row struct {
 	// Include is the user's own choice for this row. It only has meaning while
 	// the row is eligible; see Model.Selected.
 	Include bool
+
+	// Redact rewrites this repository's history to hide email addresses.
+	//
+	// Per row rather than per run, because rewriting history is not something
+	// to have happen to a repository by side effect: with a single switch,
+	// opening a gate or checking one more box silently redacted whatever came
+	// with it.
+	Redact bool
 }
 
 // eligible reports whether the category gates currently let this row through.
@@ -69,10 +77,10 @@ type Model struct {
 	// was not asked about forks does not take them.
 	groups, forks, archived bool
 
-	// redact and keepEmail carry the history-rewriting decision, which lives
-	// here rather than in a separate prompt so that the one screen holds every
-	// answer the run depends on.
-	redact    bool
+	// keepEmail is the one address left linked to its GitHub account. It stays
+	// on the model rather than on the rows because it is a fact about the
+	// person, not about any repository: whichever histories are rewritten,
+	// this address survives all of them.
 	keepEmail string
 
 	// query filters the visible rows by substring. Typing it is a search, not
@@ -104,7 +112,6 @@ func NewModel(rows []Row, groups, forks, archived, redact bool, keepEmail string
 		groups:    groups,
 		forks:     forks,
 		archived:  archived,
-		redact:    redact,
 		keepEmail: keepEmail,
 		width:     80,
 		height:    24,
@@ -115,6 +122,9 @@ func NewModel(rows []Row, groups, forks, archived, redact bool, keepEmail string
 	// that takes the most keystrokes.
 	for i := range m.rows {
 		m.rows[i].Include = true
+		// --redact-emails on the command line asks for all of them, which is
+		// the only way every row starts redacted.
+		m.rows[i].Redact = redact
 	}
 	return m
 }
@@ -133,8 +143,37 @@ func (m *Model) SetSize(w, h int) {
 func (m *Model) Done() bool      { return m.done }
 func (m *Model) Cancelled() bool { return m.cancelled }
 
-// Redact and KeepEmail expose the history-rewriting answers.
-func (m *Model) Redact() bool      { return m.redact }
+// Redact reports whether any repository in the run is to be redacted, which is
+// what decides whether a Mapper is built at all.
+func (m *Model) Redact() bool {
+	for _, r := range m.rows {
+		if r.Redact && r.eligible(m.groups, m.forks, m.archived) && r.Include {
+			return true
+		}
+	}
+	return false
+}
+
+// RedactedRepos returns the Gitea full names whose history is to be rewritten,
+// in the shape migrate.Options wants.
+//
+// A nil result means none, and the caller must not pass an empty map instead:
+// to the migrator a nil RedactOnly means "every repository", which is the
+// opposite of what an empty selection asks for.
+func (m *Model) RedactedRepos() map[string]bool {
+	out := map[string]bool{}
+	for _, r := range m.rows {
+		if r.Redact && r.eligible(m.groups, m.forks, m.archived) && r.Include {
+			out[r.Name] = true
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// KeepEmail is the address left linked to its GitHub account.
 func (m *Model) KeepEmail() string { return m.keepEmail }
 
 // Gates exposes the three category answers.

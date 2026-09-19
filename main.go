@@ -358,6 +358,11 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	var plan []migrate.Result
 	var overrides map[string]bool
 
+	// Which repositories are to have their history rewritten. Left nil by the
+	// numbered prompts, where --redact-emails is all or nothing, and filled in
+	// by the selection screen, where it is chosen row by row.
+	var redactOnly map[string]bool
+
 	if useTUI {
 		// Probe every repository once with all three gates open, so the screen
 		// already knows which are on GitHub and which have no commits.
@@ -415,6 +420,7 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		*redactEmails = answered.Redact()
 		keepEmails = addAddress(keepEmails, answered.KeepEmail())
 		overrides = answered.VisibilityOverrides()
+		redactOnly = answered.RedactedRepos()
 
 		// The plan is the probe narrowed to what was chosen. Reusing it rather
 		// than sweeping the API a second time keeps the wait to one.
@@ -459,6 +465,7 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		VisibilityOverride:    overrides,
 		Concurrency:           *concurrency,
 		Mapper:                mapper,
+		RedactOnly:            redactOnly,
 	}
 
 	if !useTUI {
