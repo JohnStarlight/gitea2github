@@ -28,12 +28,34 @@ import (
 	"sync"
 )
 
-// DefaultDomain is where redacted addresses are pointed.
+// Domain is where redacted addresses are pointed. It is fixed rather than
+// configurable, for two reasons.
 //
 // ".invalid" is reserved by RFC 2606 and is guaranteed never to resolve, so a
 // redacted address can never accidentally become a real mailbox belonging to
-// someone else. A made-up domain cannot promise that.
-const DefaultDomain = "redacted.invalid"
+// someone else. A domain chosen by whoever ran the migration cannot promise
+// that, which is reason enough on its own.
+//
+// The second reason is that the shape of a redacted address is read back
+// later. A repository on GitHub is the only record of how it was redacted, and
+// AddressPattern recovers that by recognising the addresses themselves. A
+// shape that varies from one run to the next is not a shape that can be
+// recognised.
+const Domain = "redacted.invalid"
+
+// AddressPattern matches an address this package produced.
+//
+// This is a contract, not an implementation detail. Recovering how a migration
+// was redacted -- which addresses were left alone, and therefore which ones a
+// later rewrite has to leave alone too -- means telling a redacted address from
+// a real one by looking at it. Changing the shape below silently strands every
+// repository redacted before the change.
+var AddressPattern = regexp.MustCompile(`^[0-9a-f]{10}@` + regexp.QuoteMeta(Domain) + `$`)
+
+// IsRedacted reports whether addr is one this package produced.
+func IsRedacted(addr string) bool {
+	return AddressPattern.MatchString(strings.ToLower(strings.TrimSpace(addr)))
+}
 
 // maxMessageBytes caps how large a commit message may be before we stop trying
 // to scan it and pass it through untouched. Messages are normally a few hundred
@@ -49,8 +71,7 @@ var emailPattern = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za
 // Mapper decides what each address becomes, and remembers its decisions so the
 // same person maps to the same replacement everywhere.
 type Mapper struct {
-	domain string
-	keep   map[string]bool
+	keep map[string]bool
 
 	// Workers migrate repositories concurrently and each one filters its own
 	// stream, so the assignment table needs a lock.
@@ -61,10 +82,7 @@ type Mapper struct {
 // NewMapper builds a Mapper. Addresses in keep are passed through untouched --
 // that is how you keep your own commits linked to your GitHub profile while
 // redacting everyone else's.
-func NewMapper(domain string, keep []string) *Mapper {
-	if domain == "" {
-		domain = DefaultDomain
-	}
+func NewMapper(keep []string) *Mapper {
 	k := make(map[string]bool, len(keep))
 	for _, addr := range keep {
 		addr = strings.ToLower(strings.TrimSpace(addr))
@@ -72,7 +90,7 @@ func NewMapper(domain string, keep []string) *Mapper {
 			k[addr] = true
 		}
 	}
-	return &Mapper{domain: domain, keep: k, assigned: map[string]string{}}
+	return &Mapper{keep: k, assigned: map[string]string{}}
 }
 
 // Redacted returns the replacement for one address.
@@ -95,7 +113,7 @@ func (m *Mapper) Redacted(addr string) string {
 		return existing
 	}
 	sum := sha256.Sum256([]byte(key))
-	replacement := hex.EncodeToString(sum[:5]) + "@" + m.domain
+	replacement := hex.EncodeToString(sum[:5]) + "@" + Domain
 	m.assigned[key] = replacement
 	return replacement
 }
