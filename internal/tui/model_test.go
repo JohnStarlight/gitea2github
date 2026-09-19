@@ -268,3 +268,30 @@ func contains(list []string, want string) bool {
 	}
 	return false
 }
+
+// TestNewModelDoesNotWriteThroughToItsArgument covers a sharp edge the screen
+// would otherwise leave for its callers: it writes to every row from the
+// moment it is built, so a caller that reused the slice it passed -- to build
+// a second screen, or to read back what it handed over -- would find it
+// altered underneath.
+func TestNewModelDoesNotWriteThroughToItsArgument(t *testing.T) {
+	rows := []Row{{Name: "me/a"}, {Name: "me/b"}}
+
+	first := NewModel(rows, false, false, false, true, "")
+	first.press(Key{Kind: KeyRune, Rune: 'v'})
+
+	for i, r := range rows {
+		if r.Include || r.Redact {
+			t.Errorf("row %d was written through: %+v", i, r)
+		}
+	}
+
+	// A second screen built from the same slice must start clean.
+	second := NewModel(rows, false, false, false, false, "")
+	if second.rows[0].Private != rows[0].Private {
+		t.Error("the second screen inherited the first one's visibility flip")
+	}
+	if len(second.RedactedRepos()) != 0 {
+		t.Error("the second screen inherited the first one's redaction")
+	}
+}
