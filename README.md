@@ -8,6 +8,7 @@ on GitHub, but it works with any Gitea instance.
 
 [Install](#install) ·
 [Credentials](#credentials) ·
+[Your token](#what-this-does-with-your-token) ·
 [Commands](#commands) ·
 [Examples](#examples) ·
 [Redacting emails](#redacting-email-addresses) ·
@@ -97,6 +98,61 @@ error: 2 check(s) failed; see above
 
 Interactive prompting is disabled on every git call, so a missing credential is
 always an error message, never a hang.
+
+## What this does with your token
+
+This tool asks for the keys to two accounts, so it should not ask you to take
+its word for anything. Every claim below is one command away from being
+checked, on the copy of the source you are about to build.
+
+**It never asks you to paste a token.** It reads the credentials you already
+use from the shell — `gh auth token`, the git credential helper, your keychain,
+or an environment variable you set. There is no config file to write a secret
+into, and nothing to mistype.
+
+**Your tokens only ever go to two hosts.** The GitHub address is a constant in
+the source, not a setting; the Gitea address is the one you type. Everything
+that opens a network connection lives in two files:
+
+```sh
+grep -rn 'http\.\|Dial(' --include='*.go' internal main.go | grep -v _test
+```
+
+**Your tokens never reach the disk, the process list, or the logs.** The tool
+writes no config file and keeps no credential of its own. Tokens live in memory
+for the length of the run and are stripped from every line of git output before
+it is printed.
+
+Crucially, a token is never spliced into a URL. Doing that is the usual way to
+authenticate git from a program, and it leaks twice: the URL shows up in the
+argument list `ps` publishes to **every** user on the machine, and `git clone`
+records the URL it cloned from, so the token is also written into the mirror's
+config — where an interrupted run would leave it. Instead git is handed a
+plain URL and asks for the credential through `GIT_ASKPASS`, which re-runs this
+binary and reads the token from its environment. Environment variables are
+readable only by you and root, and are never written anywhere:
+
+```sh
+grep -rn 'GIT_ASKPASS\|askpassEnv' --include='*.go' internal
+```
+
+That property is enforced rather than documented: `runGitAs` refuses to run a
+git command that carries the credential in its arguments, and a test fails the
+build if anything in the package builds a URL with credentials in it.
+
+**The dependency tree is one package deep.** Two modules, both from the Go
+team, neither of which can open a network connection:
+
+```sh
+go list -m all          # golang.org/x/term, golang.org/x/sys
+```
+
+`go.sum` pins both by hash, and Go verifies them against the public
+[transparency log](https://sum.golang.org) on every build, so the code you
+audit is the code that runs.
+
+**You build it yourself.** `go install` compiles from source on your machine.
+There is no prebuilt binary to trust, and no install script piped into a shell.
 
 ## Commands
 
