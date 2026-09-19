@@ -67,9 +67,8 @@ type RelinkModel struct {
 	editingRoot bool
 	scanning    string // non-empty while a scan is owed for this path
 
-	query     string
-	searching bool
-	cursor    int
+	// list holds the cursor and the search box, shared with the other screen.
+	list
 
 	width, height   int
 	done, cancelled bool
@@ -199,9 +198,8 @@ func (m *RelinkModel) Paths() []string {
 // visible returns the indices the text query admits.
 func (m *RelinkModel) visible() []int {
 	var out []int
-	q := strings.ToLower(strings.TrimSpace(m.query))
 	for i, c := range m.clones {
-		if q == "" || strings.Contains(strings.ToLower(c.Display), q) {
+		if m.matches(c.Display) {
 			out = append(out, i)
 		}
 	}
@@ -343,44 +341,11 @@ func (m *RelinkModel) updateRoot(k Key) {
 	}
 }
 
-func (m *RelinkModel) updateSearch(k Key) {
-	switch k.Kind {
-	case KeyEnter:
-		m.searching = false
-	case KeyEscape, KeyCtrlC:
-		m.searching, m.query = false, ""
-		m.clampCursor()
-	case KeyBackspace:
-		if m.query != "" {
-			_, size := lastRune(m.query)
-			m.query = m.query[:len(m.query)-size]
-			m.clampCursor()
-		}
-	case KeySpace:
-		m.query += " "
-		m.clampCursor()
-	case KeyRune:
-		m.query += string(k.Rune)
-		m.clampCursor()
-	}
-}
+func (m *RelinkModel) updateSearch(k Key) { m.searchKey(k, len(m.visible())) }
 
-func (m *RelinkModel) move(delta int) {
-	m.cursor += delta
-	m.clampCursor()
-}
+func (m *RelinkModel) move(delta int) { m.list.move(delta, len(m.visible())) }
 
-func (m *RelinkModel) clampCursor() {
-	n := len(m.visible())
-	switch {
-	case n == 0:
-		m.cursor = 0
-	case m.cursor < 0:
-		m.cursor = 0
-	case m.cursor >= n:
-		m.cursor = n - 1
-	}
-}
+func (m *RelinkModel) clampCursor() { m.clamp(len(m.visible())) }
 
 func (m *RelinkModel) toggleCurrent() {
 	i := m.currentClone()
