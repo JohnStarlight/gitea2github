@@ -212,6 +212,12 @@ category with nothing in it is left out rather than shown as a zero.
 Turning redaction on repaints every selected row at once, which is the point:
 it is the setting whose consequence is easiest to forget.
 
+The toggles along the top are drawn in the same colours, one shade brighter, so
+what a gate touches needs no explaining: cyan while its repositories wait
+behind it, green once they are coming along, amber for the one that changes
+what lands on GitHub. A gate whose repositories are every one of them already
+there is greyed out rather than left advertising a count it cannot act on.
+
 The symbols carry the same distinction as the colours, so the screen still
 reads in a monochrome terminal or to someone who cannot separate the hues.
 

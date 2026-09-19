@@ -286,3 +286,105 @@ func TestHeaderCarriesTheTotal(t *testing.T) {
 		t.Errorf("header = %q, want the singular", got)
 	}
 }
+
+// gateRows is an account with one gate that can act and one that cannot: the
+// archived repository is already on GitHub, so opening its gate changes
+// nothing.
+func gateRows() []Row {
+	return []Row{
+		{Name: "me/plain", SourcePrivate: true, Private: true},
+		{Name: "me/fork", Fork: true},
+		{Name: "me/attic", Archived: true, Blocked: "already on GitHub, left untouched"},
+	}
+}
+
+// TestGateTakesTheColourOfTheRowsItGoverns is what ties the toggles at the top
+// to the list below them: the control is drawn in the colour of what it
+// produces, so what a gate touches needs no explaining.
+func TestGateTakesTheColourOfTheRowsItGoverns(t *testing.T) {
+	m := NewModel(gateRows(), false, false, false, false, "")
+	m.SetSize(100, 24)
+
+	// Closed, with a fork waiting behind it: the fork's row is cyan, so is the
+	// gate.
+	bar := m.gateBar()
+	forks := gateSegment(t, bar, "forks")
+	if !strings.Contains(forks, ansiBrightCyan) {
+		t.Errorf("a closed gate with rows waiting is not cyan: %q", forks)
+	}
+	if got := m.rowState(m.rows[1]); got.colour() != ansiCyan {
+		t.Errorf("setup: the fork row is %v, want cyan", got)
+	}
+
+	// Opened, the fork joins the run and both turn green.
+	m.Update(Key{Kind: KeyRune, Rune: '2'})
+	forks = gateSegment(t, m.gateBar(), "forks")
+	if !strings.Contains(forks, ansiBrightGreen) {
+		t.Errorf("an open gate is not green: %q", forks)
+	}
+	if got := m.rowState(m.rows[1]); got.colour() != ansiGreen {
+		t.Errorf("the fork row is %v after opening its gate, want green", got)
+	}
+}
+
+// TestAGateThatCanDeliverNothingIsGreyedOut stops the screen advertising a
+// count it cannot act on: every repository behind this gate is already on
+// GitHub, so pressing it changes nothing whichever way it is set.
+func TestAGateThatCanDeliverNothingIsGreyedOut(t *testing.T) {
+	m := NewModel(gateRows(), false, false, false, false, "")
+	m.SetSize(100, 24)
+
+	archived := gateSegment(t, m.gateBar(), "archived")
+	if strings.Contains(archived, ansiBrightCyan) || strings.Contains(archived, ansiBrightGreen) {
+		t.Errorf("a gate with nothing to give is drawn as though it had: %q", archived)
+	}
+	if !strings.Contains(archived, ansiDim) {
+		t.Errorf("a gate with nothing to give is not greyed out: %q", archived)
+	}
+
+	// Opening it must not change the tally, which is the fact the grey is
+	// promising.
+	before := m.tally()
+	m.Update(Key{Kind: KeyRune, Rune: '3'})
+	if after := m.tally(); after != before {
+		t.Errorf("opening a spent gate changed the tally: %+v -> %+v", before, after)
+	}
+}
+
+// TestRedactionToggleIsDrawnInTheColourItProduces covers the other control on
+// the bar.
+func TestRedactionToggleIsDrawnInTheColourItProduces(t *testing.T) {
+	m := NewModel(gateRows(), false, false, false, false, "")
+	m.SetSize(100, 24)
+
+	if bar := m.redactBar(); strings.Contains(bar, ansiBrightAmber) {
+		t.Errorf("redaction is off but its toggle is amber: %q", bar)
+	}
+	m.Update(Key{Kind: KeyRune, Rune: 'e'})
+	if bar := m.redactBar(); !strings.Contains(bar, ansiBrightAmber) {
+		t.Errorf("redaction is on but its toggle is not amber: %q", bar)
+	}
+	if got := m.rowState(m.rows[0]); got.colour() != ansiAmber {
+		t.Errorf("with redaction on a row is %v, want amber", got)
+	}
+}
+
+// gateSegment pulls one labelled toggle out of the bar, colours and all.
+func gateSegment(t *testing.T, bar, label string) string {
+	t.Helper()
+	idx := strings.Index(bar, label)
+	if idx < 0 {
+		t.Fatalf("the bar does not mention %q: %q", label, stripANSI(bar))
+	}
+	start := strings.LastIndex(bar[:idx], "\x1b[")
+	for start > 0 && !strings.HasPrefix(bar[start:], ansiBrightCyan) &&
+		!strings.HasPrefix(bar[start:], ansiBrightGreen) &&
+		!strings.HasPrefix(bar[start:], ansiDim) {
+		start = strings.LastIndex(bar[:start], "\x1b[")
+	}
+	end := strings.Index(bar[idx:], ansiReset)
+	if end < 0 {
+		end = len(bar) - idx
+	}
+	return bar[start : idx+end]
+}
