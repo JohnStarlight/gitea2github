@@ -216,9 +216,13 @@ The counts along the bottom read as arithmetic rather than as a row of
 independent figures — `20 + 10 = 30` can be checked at a glance — and are drawn
 in the same colours, so the footer is the key to the list above it. When there
 is nothing to split they collapse to `30 to migrate, all unchanged`, and a
-category with nothing in it is left out rather than shown as a zero. On a
-narrow terminal the three kinds of change are summed into one before anything
-is truncated.
+category with nothing in it is left out rather than shown as a zero.
+
+As the terminal narrows the line gives up the tail first and the breakdown
+last: `could add` and `not moving` only restate what the cyan and grey rows
+already say, while the breakdown says something only this line can. Before
+summing the three kinds into one it shortens the combined label to `both
+changes`, which is unambiguous with the other two named immediately before it.
 
 The fuller shades need a 256-colour terminal. Where `TERM` does not claim one,
 the screen falls back to the sixteen every terminal has, choosing hues that are

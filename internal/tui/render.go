@@ -305,26 +305,31 @@ func wrapText(s string, width int) []string {
 func (m *Model) footer() string {
 	t := m.tally()
 
-	var rest []string
+	couldAdd, notMoving := "", ""
 	if t.Available > 0 {
-		rest = append(rest, fmt.Sprintf("%s%d could add%s", ansiCyan, t.Available, ansiReset))
+		couldAdd = fmt.Sprintf("   %s%d could add%s", ansiCyan, t.Available, ansiReset)
 	}
 	if t.Inert > 0 {
-		rest = append(rest, fmt.Sprintf("%s%d not moving%s", ansiDim, t.Inert, ansiReset))
-	}
-	tail := ""
-	if len(rest) > 0 {
-		tail = "   " + strings.Join(rest, "   ")
+		notMoving = fmt.Sprintf("   %s%d not moving%s", ansiDim, t.Inert, ansiReset)
 	}
 
-	// Three widths of the same sentence, narrowest last. The breakdown is
-	// dropped a piece at a time rather than truncated, because a count cut off
-	// halfway is worse than a count that was never shown.
-	for _, line := range []string{
-		"  " + m.countSentence(t, true) + tail,
-		"  " + m.countSentence(t, false) + tail,
-		"  " + m.countSentence(t, false),
+	// Narrowing order, widest first. What is given up first is the tail, not
+	// the breakdown: naming the changes is the line's job, while "could add"
+	// and "not moving" only restate what the cyan and grey rows already say.
+	// Summing the changes into one figure is the last thing tried before the
+	// bare total, because "3 with changes" answers less than it looks.
+	var candidates []string
+	for _, sentence := range []string{
+		m.countSentence(t, namesInFull),
+		m.countSentence(t, namesAbbreviated),
+		m.countSentence(t, namesSummed),
 	} {
+		candidates = append(candidates,
+			"  "+sentence+couldAdd+notMoving,
+			"  "+sentence+couldAdd,
+			"  "+sentence)
+	}
+	for _, line := range candidates {
 		if len(stripANSI(line)) <= m.width {
 			return m.footerLines(line)
 		}
@@ -332,10 +337,27 @@ func (m *Model) footer() string {
 	return m.footerLines(fmt.Sprintf("  %s%d to migrate%s", ansiBold, t.Migrating(), ansiReset))
 }
 
-// countSentence renders the counts as arithmetic. With detail, the three kinds
-// of change are named separately; without it they are summed, which is what
-// makes room on a narrow terminal.
-func (m *Model) countSentence(t tally, detail bool) string {
+// naming is how much room the count line has for the three kinds of change.
+type naming int
+
+const (
+	// namesInFull spells out every kind: "1 visibility & redacted".
+	namesInFull naming = iota
+
+	// namesAbbreviated shortens only the combined one to "1 both changes".
+	// The other two are named immediately before it, so "both" has its
+	// referent in view -- which is exactly what it lacked when it stood alone.
+	// This is the rung that fits an eighty-column terminal.
+	namesAbbreviated
+
+	// namesSummed gives up the breakdown: "3 with changes". Last resort,
+	// because it answers less than it looks.
+	namesSummed
+)
+
+// countSentence renders the counts as arithmetic, naming the kinds of change
+// in as much detail as the given level allows.
+func (m *Model) countSentence(t tally, level naming) string {
 	if t.Migrating() == 0 {
 		return ansiBold + "nothing to migrate" + ansiReset
 	}
@@ -347,12 +369,18 @@ func (m *Model) countSentence(t tally, detail bool) string {
 		colour string
 	}
 	buckets := []bucket{{t.Verbatim, "unchanged", ansiGreen}}
-	if detail {
+	switch level {
+	case namesInFull:
 		buckets = append(buckets,
 			bucket{t.Visibility, "visibility", ansiVisibility},
 			bucket{t.Redacted, "redacted", ansiRedacted},
 			bucket{t.BothWays, "visibility & redacted", ansiBothWays})
-	} else {
+	case namesAbbreviated:
+		buckets = append(buckets,
+			bucket{t.Visibility, "visibility", ansiVisibility},
+			bucket{t.Redacted, "redacted", ansiRedacted},
+			bucket{t.BothWays, "both changes", ansiBothWays})
+	default:
 		buckets = append(buckets, bucket{t.Changed(), "with changes", ansiBothWays})
 	}
 

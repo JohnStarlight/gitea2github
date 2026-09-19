@@ -107,8 +107,15 @@ type Model struct {
 // NewModel builds the screen state. Rows are shown in the order given, which
 // the caller has already sorted.
 func NewModel(rows []Row, groups, forks, archived, redact bool, keepEmail string) *Model {
+	// The rows are copied rather than kept by reference. The screen writes to
+	// them from the first line of this function onwards, and a caller that
+	// reused its slice -- to build a second screen, or to read back what it
+	// passed -- would find it altered underneath.
+	owned := make([]Row, len(rows))
+	copy(owned, rows)
+
 	m := &Model{
-		rows:      rows,
+		rows:      owned,
 		groups:    groups,
 		forks:     forks,
 		archived:  archived,

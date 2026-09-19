@@ -539,3 +539,89 @@ func TestFooterNamesBothChangesRatherThanSayingBoth(t *testing.T) {
 		t.Errorf("footer %q does not name the two changes", got)
 	}
 }
+
+// threeWayModel has one repository of each kind of change, which is the case
+// the count line has the least room for.
+func threeWayModel(width int) *Model {
+	rows := []Row{
+		{Name: "me/redacted-one", SourcePrivate: true, Private: true},
+		{Name: "me/flipped-one", SourcePrivate: true, Private: true},
+		{Name: "me/both-of-them", SourcePrivate: true, Private: true},
+		{Name: "me/untouched-one", SourcePrivate: true, Private: true},
+		{Name: "me/behind-a-gate", Fork: true, SourcePrivate: true, Private: true},
+		{Name: "me/already-there", Blocked: "already on GitHub, left untouched"},
+	}
+	m := NewModel(rows, false, false, false, false, "")
+	m.SetSize(width, 24)
+	m.cursor = 0
+	m.Update(Key{Kind: KeyRune, Rune: 'e'})
+	m.cursor = 1
+	m.Update(Key{Kind: KeyRune, Rune: 'v'})
+	m.cursor = 2
+	m.Update(Key{Kind: KeyRune, Rune: 'v'})
+	m.Update(Key{Kind: KeyRune, Rune: 'e'})
+	return m
+}
+
+// TestBreakdownSurvivesAnEightyColumnTerminal is the width that matters. With
+// all three kinds of change present the fully spelled-out line does not fit,
+// and giving up the breakdown there was the wrong thing to give up: "3 with
+// changes" answers less than the three counts it replaced.
+func TestBreakdownSurvivesAnEightyColumnTerminal(t *testing.T) {
+	got := footerText(threeWayModel(80))
+	if strings.Contains(got, "with changes") {
+		t.Errorf("at 80 columns the breakdown was dropped: %q", got)
+	}
+	for _, want := range []string{"unchanged", "visibility", "redacted", "both changes"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("footer %q is missing %q", got, want)
+		}
+	}
+}
+
+// TestNarrowingGivesUpTheTailBeforeTheBreakdown pins the order. "could add"
+// and "not moving" restate what the cyan and grey rows already say; the
+// breakdown says something only this line can.
+func TestNarrowingGivesUpTheTailBeforeTheBreakdown(t *testing.T) {
+	wide := footerText(threeWayModel(120))
+	if !strings.Contains(wide, "could add") {
+		t.Fatalf("setup: the wide line should carry the tail: %q", wide)
+	}
+
+	got := footerText(threeWayModel(92))
+	if strings.Contains(got, "could add") {
+		t.Errorf("at 92 columns the tail was kept: %q", got)
+	}
+	if !strings.Contains(got, "visibility & redacted") {
+		t.Errorf("at 92 columns the breakdown was given up before the tail: %q", got)
+	}
+}
+
+// TestTheCountsDoNotDependOnTheTerminalWidth guards against the arithmetic
+// changing as the window is resized, which would make the line untrustworthy.
+func TestTheCountsDoNotDependOnTheTerminalWidth(t *testing.T) {
+	var first tally
+	for i, w := range []int{120, 100, 92, 80, 64, 40} {
+		got := threeWayModel(w).tally()
+		if i == 0 {
+			first = got
+			continue
+		}
+		if got != first {
+			t.Errorf("at %d columns the tally is %+v, want %+v", w, got, first)
+		}
+	}
+}
+
+// TestEveryLineFitsAtCommonWidths sweeps the whole screen rather than the
+// count line alone, since the breakdown is only useful if nothing else spills.
+func TestEveryLineFitsAtCommonWidths(t *testing.T) {
+	for _, w := range []int{120, 100, 92, 80, 72, 64, 48, 40} {
+		m := threeWayModel(w)
+		for _, line := range strings.Split(m.View("gitea.example.com -> github.com/me"), "\r\n") {
+			if got := len(stripANSI(line)); got > w {
+				t.Errorf("at %d columns a line is %d wide: %q", w, got, stripANSI(line))
+			}
+		}
+	}
+}
