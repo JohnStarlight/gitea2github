@@ -877,7 +877,7 @@ func relinkPlanFromProbe(probe []relink.Result, only map[string]bool,
 			if m, ok := modes[r.Path]; ok && m != "" {
 				mode = m
 			}
-			r.Reason = "would " + relink.Describe(mode, oldName)
+			r.Reason = relink.Describe(mode, oldName)
 		}
 		plan = append(plan, r)
 	}
@@ -1275,7 +1275,7 @@ func printRelinkResults(results []relink.Result) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "ACTION\tPATH\tGITHUB\tDETAIL")
 	for _, r := range results {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.Action, r.Path, r.NewURL, r.Reason)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.Action, shortenPath(r.Path), r.NewURL, r.Reason)
 	}
 	_ = w.Flush()
 	fmt.Println()
