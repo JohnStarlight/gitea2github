@@ -17,9 +17,16 @@ const (
 	ansiDim     = "\x1b[2m"
 	ansiReverse = "\x1b[7m"
 	ansiGreen   = "\x1b[32m"
-	ansiYellow  = "\x1b[33m"
-	ansiAmber   = "\x1b[33m"
-	ansiCyan    = "\x1b[36m"
+
+	// The toggles at the top are drawn in the bright variant of the colour of
+	// the rows they govern: near enough to connect the two at a glance, far
+	// enough that a control is not mistaken for content.
+	ansiBrightGreen = "\x1b[92m"
+	ansiBrightAmber = "\x1b[93m"
+	ansiBrightCyan  = "\x1b[96m"
+	ansiYellow      = "\x1b[33m"
+	ansiAmber       = "\x1b[33m"
+	ansiCyan        = "\x1b[36m"
 )
 
 // View renders the whole screen.
@@ -96,31 +103,42 @@ func (m *Model) listLines(vis []int, body int) []string {
 
 // gateBar renders the three category toggles and the redaction toggle.
 func (m *Model) gateBar() string {
-	counts := map[string]int{}
-	for _, r := range m.rows {
-		if r.Foreign {
-			counts["groups"]++
-		}
-		if r.Fork {
-			counts["forks"]++
-		}
-		if r.Archived {
-			counts["archived"]++
-		}
-	}
-
 	var parts []string
-	add := func(key, label string, on bool, n int) {
-		if n == 0 {
+	add := func(key, label string, on bool, pred func(Row) bool) {
+		total, actionable := 0, 0
+		for _, r := range m.rows {
+			if !pred(r) {
+				continue
+			}
+			total++
+			if r.Blocked == "" {
+				actionable++
+			}
+		}
+		if total == 0 {
 			// A gate for a category the account does not contain is noise, and
 			// noise is what trains people to stop reading the screen.
 			return
 		}
-		parts = append(parts, fmt.Sprintf("%s %s %s (%d)", dim(key), checkbox(on), label, n))
+
+		// The toggle takes the colour of the rows it governs: cyan while they
+		// wait behind it, green once they are coming along. A gate whose
+		// repositories are every one of them already on GitHub can deliver
+		// nothing whichever way it is set, so it is greyed out rather than
+		// left advertising a count it cannot act on.
+		colour := ansiBrightCyan
+		switch {
+		case actionable == 0:
+			colour = ansiDim
+		case on:
+			colour = ansiBrightGreen
+		}
+		parts = append(parts, fmt.Sprintf("%s %s%s %s (%d)%s",
+			dim(key), colour, checkbox(on), label, total, ansiReset))
 	}
-	add("1", "group projects", m.groups, counts["groups"])
-	add("2", "forks", m.forks, counts["forks"])
-	add("3", "archived", m.archived, counts["archived"])
+	add("1", "group projects", m.groups, func(r Row) bool { return r.Foreign })
+	add("2", "forks", m.forks, func(r Row) bool { return r.Fork })
+	add("3", "archived", m.archived, func(r Row) bool { return r.Archived })
 
 	if len(parts) == 0 {
 		return dim("  every repository here is your own, and none is a fork or archived")
@@ -138,7 +156,14 @@ func (m *Model) gateBar() string {
 // long, and an address silently truncated off the edge of the screen is how
 // somebody ends up publishing the one they meant to keep private.
 func (m *Model) redactBar() string {
-	line := fmt.Sprintf("  %s %s redact emails", dim("e"), checkbox(m.redact))
+	// Amber, because amber is what it makes the rows: this is the one
+	// keystroke that changes what lands on GitHub, and the toggle says so in
+	// the colour the list will take.
+	colour := ansiDim
+	if m.redact {
+		colour = ansiBrightAmber
+	}
+	line := fmt.Sprintf("  %s %s%s redact emails%s", dim("e"), colour, checkbox(m.redact), ansiReset)
 	if !m.redact {
 		return truncateANSI(line, m.width)
 	}
@@ -369,9 +394,11 @@ func (m *Model) headerLine(header string) string {
 	return ansiBold + header + ansiReset + strings.Repeat(" ", gap) + dim(count)
 }
 
+// checkbox draws a toggle. It carries no colour of its own: the caller
+// supplies the one that says what the toggle governs.
 func checkbox(on bool) string {
 	if on {
-		return ansiGreen + "[x]" + ansiReset
+		return "[x]"
 	}
 	return "[ ]"
 }
