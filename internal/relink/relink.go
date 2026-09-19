@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/JohnStarlight/gitea2github/internal/github"
 	"github.com/JohnStarlight/gitea2github/internal/redact"
@@ -92,6 +93,11 @@ type Options struct {
 	// caller so this package holds no second copy of that mechanism.
 	GitEnv []string
 
+	// Concurrency is how many working copies are examined at once. Scanning is
+	// dominated by waiting on GitHub -- two calls per clone when Verify is on
+	// -- so doing them one after another spends most of its time idle.
+	Concurrency int
+
 	// DryRun reports what would change without touching any repository.
 	DryRun bool
 
@@ -123,10 +129,38 @@ func Run(ctx context.Context, opts Options) ([]Result, error) {
 		gh = github.New(opts.GitHubTok)
 	}
 
-	results := make([]Result, 0, len(repos))
-	for _, path := range repos {
-		results = append(results, relinkOne(ctx, path, gh, opts))
+	if opts.Concurrency < 1 {
+		opts.Concurrency = 4
 	}
+
+	// Each worker owns one slot, so the slice needs no lock and the results
+	// stay in the order the directory was walked in -- which is the order they
+	// are printed and numbered in.
+	results := make([]Result, len(repos))
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < opts.Concurrency; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				results[i] = relinkOne(ctx, repos[i], gh, opts)
+			}
+		}()
+	}
+	for i := range repos {
+		select {
+		case jobs <- i:
+		case <-ctx.Done():
+			// Ctrl-C: stop handing out work and report what is finished.
+			close(jobs)
+			wg.Wait()
+			return results, nil
+		}
+	}
+	close(jobs)
+	wg.Wait()
+
 	return results, nil
 }
 
