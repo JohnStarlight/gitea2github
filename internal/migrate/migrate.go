@@ -101,6 +101,17 @@ type Options struct {
 	// several repositories is redacted to the same address in all of them.
 	Mapper *redact.Mapper
 
+	// RedactOnly narrows redaction to individual repositories, keyed by Gitea
+	// full name. A nil map means every repository is redacted, which is what
+	// --redact-emails on the command line asks for; a non-nil one is the
+	// selection screen saying "these, and not the others".
+	//
+	// Separate from Mapper rather than folded into it because the Mapper
+	// carries the shared address book: one person has to be redacted to the
+	// same replacement everywhere, whichever subset of repositories was
+	// chosen.
+	RedactOnly map[string]bool
+
 	// WorkDir holds the temporary mirror clones. When empty a directory under
 	// the system temp location is created and removed afterwards.
 	WorkDir string
@@ -222,7 +233,7 @@ func migrateOne(ctx context.Context, repo gitea.Repo, gh *github.Client, opts Op
 	}
 
 	if opts.DryRun {
-		if opts.Mapper != nil {
+		if opts.redacts(repo.FullName) {
 			return finish(StatusPlanned, "would clone, redact emails, create and push")
 		}
 		return finish(StatusPlanned, "would clone, create and push")
@@ -254,7 +265,7 @@ func migrateOne(ctx context.Context, repo gitea.Repo, gh *github.Client, opts Op
 	// locally, and the point is that the un-redacted version never reaches
 	// GitHub at all.
 	pushFrom := mirrorPath
-	if opts.Mapper != nil {
+	if opts.redacts(repo.FullName) {
 		opts.Log("redacting email addresses in %s", repo.FullName)
 		rewritten := mirrorPath + ".redacted"
 		if err := rewriteHistory(ctx, mirrorPath, rewritten, opts.Mapper); err != nil {
@@ -281,6 +292,21 @@ func migrateOne(ctx context.Context, repo gitea.Repo, gh *github.Client, opts Op
 	}
 
 	return finish(StatusMigrated, "")
+}
+
+// redacts reports whether this repository's history is to be rewritten.
+//
+// The two conditions are asked in this order because they answer different
+// questions: the Mapper is whether redaction is configured at all, and
+// RedactOnly is which repositories it reaches.
+func (o Options) redacts(fullName string) bool {
+	if o.Mapper == nil {
+		return false
+	}
+	if o.RedactOnly == nil {
+		return true
+	}
+	return o.RedactOnly[fullName]
 }
 
 // runGit executes a git command with prompting disabled and returns its

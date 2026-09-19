@@ -56,11 +56,11 @@ func (m *Model) rowState(r Row) state {
 	}
 	flipped := r.Private != r.SourcePrivate
 	switch {
-	case flipped && m.redact:
+	case flipped && r.Redact:
 		return stateBothWays
 	case flipped:
 		return stateVisibility
-	case m.redact:
+	case r.Redact:
 		return stateRedacted
 	}
 	return stateVerbatim

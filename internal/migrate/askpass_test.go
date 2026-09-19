@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/JohnStarlight/gitea2github/internal/redact"
 )
 
 // TestAskpassAnswersTheRightPrompt covers the one ambiguity in the GIT_ASKPASS
@@ -140,6 +142,39 @@ func TestNoCallSiteSplicesCredentialsIntoAURL(t *testing.T) {
 					"-- a URL carrying a token is published by ps and written "+
 					"into the clone's config", name, banned)
 			}
+		}
+	}
+}
+
+// TestRedactOnlyNarrowsRedactionToTheChosenRepositories covers the difference
+// between "redact everything" and "redact these", which the selection screen
+// depends on. The nil case is the one to get right: to this function a nil map
+// means every repository, so an empty one arriving by accident would rewrite
+// the history of a whole account nobody asked about.
+func TestRedactOnlyNarrowsRedactionToTheChosenRepositories(t *testing.T) {
+	mapper := redact.NewMapper("redacted.invalid", nil)
+
+	cases := []struct {
+		name  string
+		opts  Options
+		repo  string
+		want  bool
+		about string
+	}{
+		{"no mapper", Options{}, "me/a", false,
+			"redaction was not configured at all"},
+		{"mapper, nil selection", Options{Mapper: mapper}, "me/a", true,
+			"--redact-emails means every repository"},
+		{"mapper, chosen", Options{Mapper: mapper, RedactOnly: map[string]bool{"me/a": true}}, "me/a", true,
+			"the repository was chosen"},
+		{"mapper, not chosen", Options{Mapper: mapper, RedactOnly: map[string]bool{"me/a": true}}, "me/b", false,
+			"another repository was chosen, not this one"},
+		{"no mapper, chosen anyway", Options{RedactOnly: map[string]bool{"me/a": true}}, "me/a", false,
+			"without a Mapper there is nothing to redact with"},
+	}
+	for _, c := range cases {
+		if got := c.opts.redacts(c.repo); got != c.want {
+			t.Errorf("%s: redacts(%q) = %v, want %v (%s)", c.name, c.repo, got, c.want, c.about)
 		}
 	}
 }
