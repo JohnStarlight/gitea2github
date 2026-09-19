@@ -330,7 +330,7 @@ func (m *Model) footer() string {
 			"  "+sentence)
 	}
 	for _, line := range candidates {
-		if len(stripANSI(line)) <= m.width {
+		if visibleWidth(line) <= m.width {
 			return m.footerLines(line)
 		}
 	}
@@ -462,15 +462,25 @@ func dim(s string) string { return ansiDim + s + ansiReset }
 func quote(s string) string { return "\"" + s + "\"" }
 
 // pad right-pads s to n columns, truncating when it does not fit.
+//
+// Counted in runes rather than bytes. The ellipsis it appends is itself three
+// bytes wide and one column, so a byte count would both mis-measure the result
+// and cut a multi-byte name mid-character -- and repository names and paths
+// are not always ASCII.
 func pad(s string, n int) string {
-	if len(s) > n {
+	runes := []rune(s)
+	if len(runes) > n {
 		if n <= 1 {
-			return s[:maxInt(0, n)]
+			return string(runes[:maxInt(0, n)])
 		}
-		return s[:n-1] + "…"
+		return string(runes[:n-1]) + "…"
 	}
-	return s + strings.Repeat(" ", n-len(s))
+	return s + strings.Repeat(" ", n-len(runes))
 }
+
+// visibleWidth is how many columns s occupies once its escape sequences are
+// discounted. Counted in runes: an ellipsis is three bytes and one column.
+func visibleWidth(s string) int { return len([]rune(stripANSI(s))) }
 
 func truncate(s string, w int) string {
 	if w <= 0 || len(s) <= w {

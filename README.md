@@ -167,7 +167,7 @@ There is no prebuilt binary to trust, and no install script piped into a shell.
 | `doctor` | — | Checks both credentials and their scopes |
 | `list` | — | Lists the Gitea repositories it can see, and how each is classified |
 | `migrate` | — | Mirrors repositories to GitHub |
-| `relink` | a **directory** | Repoints the local clones under it away from Gitea |
+| `relink` | a **directory** | Repoints the local clones under it away from Gitea, one destination per clone |
 
 **`migrate` and `relink` never change anything without showing the plan and
 asking.** Run either with no flags and it asks what you want, prints exactly what
@@ -255,6 +255,38 @@ reads in a monochrome terminal or to someone who cannot separate the hues.
 
 Pass `--no-tui` for the numbered prompts instead. That is also what runs
 automatically when there is no terminal.
+
+### Repointing your clones
+
+Moving the repositories is only half the job: the working copies on your
+machine still push to Gitea. When a migration finishes, `migrate` offers to
+repoint them and opens a second screen for the clones it finds:
+
+```
+ ~/Git  ->  github.com/ivogiake                                     5 clones
+   1 [x] github   2 [ ] both   3 [ ] gitea   A all
+
+ > *  ~/Git/ascii-art     github  move origin to GitHub, keeping Gitea as gitea
+   *  ~/Git/lem-in        both    make one push reach both servers
+   *  ~/Git/go-reloaded   gitea   add a github remote, leaving origin on Gitea
+   -  ~/Git/notes                 origin is not on platform.zone01.gr
+   -  ~/Git/quad                  no matching repository on GitHub yet
+
+   3 to repoint   1 github   1 both   1 gitea   2 left alone
+   space select   1/2/3 destination   A all   a/n all/none   enter repoint   q quit
+```
+
+The destination is chosen per clone rather than per run: a folder of coursework
+rarely wants one answer for all of it — the group project you still push to
+Gitea for audits is not the one you are done with. `A` gives every clone on
+screen the destination of the one under the cursor, and `--push-to` still sets
+them all from the command line.
+
+`relink <directory>` opens the same screen on its own, for clones migrated by
+hand or on another machine. The offer after a migration never runs unasked:
+`--yes` is consent to the migration that was described, not to rewriting
+remotes in directories it never touched, so an unattended run prints the
+command to use instead.
 
 Prompts are skipped when stdin is not a terminal, so scripts and CI never hang.
 There, a run that would change something refuses and names the flag you want:
@@ -394,7 +426,8 @@ dropped. Without the flag, history transfers byte for byte.
 | --- | --- | --- |
 | `--dry-run` | `false` | Print the plan and stop, asking nothing |
 | `--yes` | `false` | Skip the questions and the confirmation |
-| `--push-to` | `github` | Where clones push — see below |
+| `--push-to` | `github` | Where clones push, for all of them — see below |
+| `--no-tui` | `false` | Use numbered prompts instead of the selection screen |
 | `--keep-as` | `gitea` | New name for the old remote (`--push-to=github` only) |
 | `--verify` | `true` | Confirm the GitHub repo exists first |
 

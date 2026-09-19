@@ -64,6 +64,17 @@ type Options struct {
 	// ModeGitea. Empty means ModeGitHub.
 	Mode string
 
+	// ModeFor overrides Mode for individual working copies, keyed by the path
+	// Run reports in a Result. It is how the selection screen records "this
+	// one to GitHub, that one to both" without forcing a single answer onto a
+	// whole directory tree.
+	ModeFor map[string]string
+
+	// Only, when non-nil, limits the run to these working copies. An empty map
+	// is not the same as a nil one: it means nothing was chosen, and nothing
+	// is touched.
+	Only map[string]bool
+
 	// DryRun reports what would change without touching any repository.
 	DryRun bool
 
@@ -118,6 +129,13 @@ func relinkOne(ctx context.Context, path string, gh *github.Client, opts Options
 		return res
 	}
 
+	// Asked after the host check so that a working copy left out on purpose is
+	// still reported as a Gitea clone rather than as something unrecognised.
+	if !opts.wants(path) {
+		res.Action, res.Reason = "skipped", "left alone"
+		return res
+	}
+
 	// Derive the repository name from the last path segment of the remote URL,
 	// dropping the conventional .git suffix. This is the same name the migrator
 	// used when creating the GitHub side, so the two halves line up.
@@ -139,11 +157,11 @@ func relinkOne(ctx context.Context, path string, gh *github.Client, opts Options
 
 	if opts.DryRun {
 		res.Action = "planned"
-		res.Reason = plannedDescription(opts.Mode, opts.OldRemoteName)
+		res.Reason = plannedDescription(opts.modeFor(path), opts.OldRemoteName)
 		return res
 	}
 
-	switch opts.Mode {
+	switch opts.modeFor(path) {
 	case ModeGitea:
 		// origin is left exactly as it is; GitHub becomes an extra remote that
 		// has to be named explicitly to be pushed to.
@@ -179,6 +197,29 @@ func relinkOne(ctx context.Context, path string, gh *github.Client, opts Options
 	}
 
 	return res
+}
+
+// modeFor resolves the destination for one working copy.
+//
+// An explicit per-copy choice is the most specific thing the user said, so it
+// beats the blanket one.
+func (o Options) modeFor(path string) string {
+	if mode, ok := o.ModeFor[path]; ok && mode != "" {
+		return mode
+	}
+	return o.Mode
+}
+
+// wants reports whether this working copy is in the run at all.
+//
+// A nil Only means every clone found, which is what the command line asks for;
+// an empty one means nothing was chosen, and is deliberately not the same
+// thing.
+func (o Options) wants(path string) bool {
+	if o.Only == nil {
+		return true
+	}
+	return o.Only[path]
 }
 
 // configureDualPush makes a single `git push` reach both servers.
@@ -232,13 +273,23 @@ func setRemote(ctx context.Context, path, name, url string) error {
 // plannedDescription explains what a dry run would have done, so --dry-run is
 // informative about the chosen mode rather than just listing paths.
 func plannedDescription(mode, oldName string) string {
+	return "would " + Describe(mode, oldName)
+}
+
+// Describe renders what a mode will do to a working copy, in the present
+// tense.
+//
+// Exported so the selection screen can label its rows with the same words the
+// dry run prints. Two descriptions of the same three modes, kept in separate
+// packages, would drift the first time one of them was reworded.
+func Describe(mode, oldName string) string {
 	switch mode {
 	case ModeGitea:
-		return "would add a github remote, leaving origin on Gitea"
+		return "add a github remote, leaving origin on Gitea"
 	case ModeBoth:
-		return "would make one push reach both servers"
+		return "make one push reach both servers"
 	default:
-		return "would move origin to GitHub, keeping Gitea as " + oldName
+		return "move origin to GitHub, keeping Gitea as " + oldName
 	}
 }
 
