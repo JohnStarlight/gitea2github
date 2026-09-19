@@ -290,7 +290,6 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	only := fs.String("only", "", "comma-separated repository names to migrate (default: all visible)")
 	noTUI := fs.Bool("no-tui", false, "choose from numbered prompts instead of the full-screen selector")
 	redactEmails := fs.Bool("redact-emails", false, "replace every email address in the history before pushing")
-	redactDomain := fs.String("redact-domain", redact.DefaultDomain, "domain to point redacted addresses at")
 	var keepEmails stringList
 	fs.Var(&keepEmails, "keep-email", "address to leave untouched when redacting (repeatable)")
 	if err := fs.Parse(args); err != nil {
@@ -452,7 +451,7 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	// to the same replacement address across all of the migrated repositories.
 	var mapper *redact.Mapper
 	if *redactEmails {
-		mapper = redact.NewMapper(*redactDomain, keepEmails)
+		mapper = redact.NewMapper(keepEmails)
 	}
 
 	options := migrate.Options{

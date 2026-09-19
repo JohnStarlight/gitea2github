@@ -421,6 +421,20 @@ commits stay linked to your GitHub profile.
 committer identities are part of what a commit hashes, and commit signatures are
 dropped. Without the flag, history transfers byte for byte.
 
+Every replaced address takes the same shape: ten hexadecimal characters, then
+`@redacted.invalid`. The domain is not configurable, for two reasons.
+
+`.invalid` is reserved by RFC 2606 and can never resolve, so a redacted address
+can never turn out to be a real mailbox belonging to somebody else. A domain
+chosen by whoever ran the migration cannot promise that.
+
+The shape also has to be recognisable later. A repository on GitHub is the only
+record of how it was redacted, and reading that back — which addresses were
+deliberately left alone, and so which ones anything working on that repository
+afterwards has to leave alone too — means telling a redacted address from a
+real one by looking at it. A shape that varied from run to run could not be
+recognised at all.
+
 ## Flags
 
 **migrate**
@@ -438,7 +452,6 @@ dropped. Without the flag, history transfers byte for byte.
 | `--jobs` | `4` | Repositories transferred at once |
 | `--redact-emails` | `false` | Replace every email address in the history, in every repository |
 | `--keep-email` | none | Address to leave untouched (repeatable) |
-| `--redact-domain` | `redacted.invalid` | Domain for redacted addresses |
 
 **relink**
 

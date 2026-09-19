@@ -11,8 +11,8 @@ import (
 // scheme promises: the same person always gets the same replacement, and two
 // different people never collide into one identity.
 func TestRedactedIsStableAndDistinct(t *testing.T) {
-	a := NewMapper("", nil)
-	b := NewMapper("", nil)
+	a := NewMapper(nil)
+	b := NewMapper(nil)
 
 	first := a.Redacted("alice@example.com")
 	if again := a.Redacted("alice@example.com"); again != first {
@@ -26,7 +26,7 @@ func TestRedactedIsStableAndDistinct(t *testing.T) {
 	if bob := a.Redacted("bob@example.com"); bob == first {
 		t.Error("two different addresses collided into one replacement")
 	}
-	if !strings.HasSuffix(first, "@"+DefaultDomain) {
+	if !strings.HasSuffix(first, "@"+Domain) {
 		t.Errorf("replacement %q does not use the reserved domain", first)
 	}
 	if strings.Contains(first, "alice") {
@@ -37,7 +37,7 @@ func TestRedactedIsStableAndDistinct(t *testing.T) {
 // TestKeepList checks that your own address survives, which is what keeps your
 // commits linked to your GitHub profile.
 func TestKeepList(t *testing.T) {
-	m := NewMapper("", []string{"Me@Example.com"})
+	m := NewMapper([]string{"Me@Example.com"})
 	if got := m.Redacted("me@example.com"); got != "me@example.com" {
 		t.Errorf("kept address was redacted to %q", got)
 	}
@@ -64,7 +64,7 @@ func TestFilterStreamRewritesIdentitiesAndMessages(t *testing.T) {
 	in.WriteString("data " + strconv.Itoa(len(message)) + "\n" + message)
 	in.WriteString("M 100644 :1 file.txt\n\ndone\n")
 
-	m := NewMapper("", nil)
+	m := NewMapper(nil)
 	var out bytes.Buffer
 	if err := FilterStream(&in, &out, m); err != nil {
 		t.Fatalf("FilterStream: %v", err)
@@ -114,7 +114,7 @@ func TestFilterStreamLeavesInlineContentAlone(t *testing.T) {
 	in.WriteString("\ndone\n")
 
 	var out bytes.Buffer
-	if err := FilterStream(&in, &out, NewMapper("", nil)); err != nil {
+	if err := FilterStream(&in, &out, NewMapper(nil)); err != nil {
 		t.Fatalf("FilterStream: %v", err)
 	}
 	if !strings.Contains(out.String(), content) {
@@ -127,7 +127,80 @@ func TestFilterStreamLeavesInlineContentAlone(t *testing.T) {
 func TestFilterStreamRejectsDelimitedData(t *testing.T) {
 	in := strings.NewReader("blob\ndata <<EOF\nhello\nEOF\n")
 	var out bytes.Buffer
-	if err := FilterStream(in, &out, NewMapper("", nil)); err == nil {
+	if err := FilterStream(in, &out, NewMapper(nil)); err == nil {
 		t.Error("expected an error for a delimited data block, got nil")
+	}
+}
+
+// TestTheAddressShapeIsAContract is the test that must be argued with before
+// the shape of a redacted address is changed.
+//
+// A repository on GitHub is the only record of how it was redacted. Recovering
+// that -- to rewrite a local clone to match, or to tell which addresses were
+// deliberately left alone -- means recognising a redacted address by looking at
+// it. Every repository redacted before a change to this shape becomes
+// unreadable by everything after it.
+func TestTheAddressShapeIsAContract(t *testing.T) {
+	got := NewMapper(nil).Redacted("student@zone01.gr")
+
+	if want := "e9e3c54b5e@redacted.invalid"; got != want {
+		t.Errorf("the redacted form of a known address is %q, want %q.\n"+
+			"If this was deliberate: every repository redacted with the old shape "+
+			"can no longer be recognised, and a local rewrite of one will not "+
+			"reproduce its commits.", got, want)
+	}
+	if !IsRedacted(got) {
+		t.Errorf("%q is not recognised as redacted by this package's own pattern", got)
+	}
+}
+
+// TestRealAddressesAreNotMistakenForRedactedOnes covers the other direction.
+// An address wrongly read as redacted would be left off the list of addresses
+// to preserve, and a rewrite would then produce commits that do not match what
+// is already on GitHub.
+func TestRealAddressesAreNotMistakenForRedactedOnes(t *testing.T) {
+	for _, addr := range []string{
+		"student@zone01.gr",
+		"me@example.com",
+		"0123456789@example.com",          // the right shape, the wrong domain
+		"e9e3c54b5e@redacted.invalid.com", // a domain that merely starts the same
+		"e9e3c54@redacted.invalid",        // too short
+		"e9e3c54b5ee@redacted.invalid",    // too long
+		"E9E3C54B5G@redacted.invalid",     // not hexadecimal
+		"",
+	} {
+		if IsRedacted(addr) {
+			t.Errorf("%q was taken for an address this package produced", addr)
+		}
+	}
+}
+
+// TestTheDomainCannotBeChosen guards the reason it is fixed. A domain supplied
+// by whoever ran the migration could be one that resolves, turning a redacted
+// address into a real mailbox belonging to somebody else -- and a shape that
+// varies from run to run cannot be recognised later.
+func TestTheDomainCannotBeChosen(t *testing.T) {
+	if Domain != "redacted.invalid" {
+		t.Errorf("Domain = %q, want redacted.invalid (RFC 2606 reserves .invalid, "+
+			"so it can never become a real mailbox)", Domain)
+	}
+	for _, addr := range []string{"a@b.com", "someone@zone01.gr", "x@y.co.uk"} {
+		if got := NewMapper(nil).Redacted(addr); !strings.HasSuffix(got, "@"+Domain) {
+			t.Errorf("%s redacted to %q, which is not on the fixed domain", addr, got)
+		}
+	}
+}
+
+// TestKeptAddressesStayRecognisablyReal is what makes the keep list
+// recoverable: an address that was preserved does not look like one that was
+// replaced.
+func TestKeptAddressesStayRecognisablyReal(t *testing.T) {
+	m := NewMapper([]string{"me@example.com"})
+
+	if got := m.Redacted("me@example.com"); IsRedacted(got) {
+		t.Errorf("a kept address came back looking redacted: %q", got)
+	}
+	if got := m.Redacted("someone@zone01.gr"); !IsRedacted(got) {
+		t.Errorf("a redacted address does not look redacted: %q", got)
 	}
 }
