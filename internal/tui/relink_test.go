@@ -472,3 +472,23 @@ func TestAnEmptyScreenSaysWhatToDo(t *testing.T) {
 		t.Errorf("an empty screen does not say what to do:\n%s", frame)
 	}
 }
+
+// TestDescriptionsNameTheRemoteAndSaySoItIsOne covers what a name on its own
+// left out. "kept as gitea" reads as a state rather than as a thing, and the
+// word "remote" on its own would not tell anybody what to type: `git push
+// gitea` needs both halves.
+func TestDescriptionsNameTheRemoteAndSaySoItIsOne(t *testing.T) {
+	cases := map[string]string{
+		relink.ModeGitHub: "gitea",
+		relink.ModeGitea:  "github",
+	}
+	for mode, remote := range cases {
+		got := relink.Describe(mode, "gitea")
+		if !strings.Contains(got, `"`+remote+`"`) {
+			t.Errorf("%s: %q does not name the %q remote", mode, got, remote)
+		}
+		if !strings.Contains(got, "remote") {
+			t.Errorf("%s: %q does not say that %q is a remote", mode, got, remote)
+		}
+	}
+}

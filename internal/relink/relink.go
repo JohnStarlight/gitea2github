@@ -286,6 +286,10 @@ func plannedDescription(mode, oldName string) string {
 // where does the next push go? Both halves are spelled out here, because the
 // second is the one somebody is deciding on.
 //
+// The surviving remote is named, and said to be a remote. The name alone --
+// "kept as gitea" -- reads as a state rather than as a thing, and the word
+// alone would not tell anybody what to type: `git push gitea` needs both.
+//
 // Exported so the selection screen labels its rows with the same words the dry
 // run prints. Two descriptions of the same three modes, kept in separate
 // packages, would drift the first time one of them was reworded.
@@ -293,13 +297,13 @@ func Describe(mode, oldName string) string {
 	switch mode {
 	case ModeGitea:
 		// origin is untouched; GitHub becomes an extra remote.
-		return "push and pull stay on Gitea; GitHub added as \"github\""
+		return "push and pull stay on Gitea; GitHub added as the \"github\" remote"
 	case ModeBoth:
 		// origin keeps its Gitea fetch URL and gains both push URLs.
 		return "push reaches both servers; pull still comes from Gitea"
 	default:
 		// origin is renamed, and a new origin points at GitHub.
-		return "push and pull use GitHub; Gitea stays as \"" + oldName + "\""
+		return "push and pull use GitHub; Gitea kept as the \"" + oldName + "\" remote"
 	}
 }
 
