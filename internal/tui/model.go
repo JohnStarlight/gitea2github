@@ -31,6 +31,12 @@ type Row struct {
 	Archived      bool
 	Foreign       bool // owned by somebody else: a group project
 
+	// Target is the name this repository will take on GitHub, and Renamed
+	// records that it differs from the repository's own name -- because two
+	// repositories wanted the same one, or because it was typed here.
+	Target  string
+	Renamed bool
+
 	// Blocked, when non-empty, is why this repository can never be migrated in
 	// this run -- it is empty, or it is already on GitHub. Such rows stay on
 	// screen, greyed out, because "where did my repository go?" is a worse
@@ -97,8 +103,11 @@ type Model struct {
 	// is still running.
 	done, cancelled bool
 
-	// editingEmail puts keystrokes into keepEmail instead of the key map.
-	editingEmail bool
+	// editingEmail puts keystrokes into keepEmail instead of the key map, and
+	// editingTarget does the same for the destination name of one row.
+	editingEmail  bool
+	editingTarget bool
+	targetInput   string
 
 	// note is a transient one-line message shown in the footer.
 	note string
@@ -197,6 +206,27 @@ func (m *Model) visible() []int {
 		if q == "" || strings.Contains(strings.ToLower(r.Name), q) {
 			out = append(out, i)
 		}
+	}
+	return out
+}
+
+// Renames returns the destination names typed on this screen, keyed by Gitea
+// full name.
+//
+// Only the ones that differ from what the row arrived with: handing back a
+// name nobody changed would record a decision that was never made.
+func (m *Model) Renames() map[string]string {
+	out := map[string]string{}
+	for _, r := range m.rows {
+		if !r.Renamed || r.Target == "" {
+			continue
+		}
+		if r.eligible(m.groups, m.forks, m.archived) && r.Include {
+			out[r.Name] = r.Target
+		}
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

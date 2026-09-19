@@ -15,6 +15,10 @@ func (m *Model) Update(k Key) {
 		m.updateEmail(k)
 		return
 	}
+	if m.editingTarget {
+		m.updateTarget(k)
+		return
+	}
 	if m.searching {
 		m.updateSearch(k)
 		return
@@ -90,8 +94,53 @@ func (m *Model) Update(k Key) {
 		} else {
 			m.note = "redact a repository with e before choosing an address to keep"
 		}
+	case 'r':
+		m.renameCurrent()
 	case '/':
 		m.searching = true
+	}
+}
+
+// renameCurrent opens the box for the destination name of the row under the
+// cursor.
+func (m *Model) renameCurrent() {
+	i := m.currentRow()
+	if i < 0 {
+		return
+	}
+	if m.rows[i].Blocked != "" {
+		m.note = m.rows[i].Name + ": " + m.rows[i].Blocked
+		return
+	}
+	if !m.rows[i].eligible(m.groups, m.forks, m.archived) {
+		m.note = m.rows[i].Name + ": " + gateHint(m.rows[i], m.groups, m.forks, m.archived)
+		return
+	}
+	m.editingTarget = true
+	m.targetInput = m.rows[i].Target
+}
+
+// updateTarget handles keys while the destination-name box has focus.
+func (m *Model) updateTarget(k Key) {
+	i := m.currentRow()
+	switch k.Kind {
+	case KeyEnter:
+		m.editingTarget = false
+		typed := strings.TrimSpace(m.targetInput)
+		if i < 0 || typed == "" {
+			return
+		}
+		m.rows[i].Target = typed
+		m.rows[i].Renamed = true
+	case KeyEscape, KeyCtrlC:
+		m.editingTarget = false
+	case KeyBackspace:
+		if m.targetInput != "" {
+			_, size := lastRune(m.targetInput)
+			m.targetInput = m.targetInput[:len(m.targetInput)-size]
+		}
+	case KeyRune:
+		m.targetInput += string(k.Rune)
 	}
 }
 

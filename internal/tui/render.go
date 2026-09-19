@@ -12,7 +12,7 @@ const chromeHeight = 10
 // chrome is chromeHeight plus the redaction warning, which only occupies a
 // line while there is something to warn about.
 func (m *Model) chrome() int {
-	if m.anyRedacted() {
+	if m.anyRedacted() || m.editingTarget {
 		return chromeHeight + 1
 	}
 	return chromeHeight
@@ -30,7 +30,11 @@ func (m *Model) View(header string) string {
 	b.WriteString(m.headerLine(header) + "\r\n")
 	b.WriteString(m.gateBar() + "\r\n")
 	b.WriteString(m.redactBar() + "\r\n")
-	if warning := m.redactWarning(); warning != "" {
+	if m.editingTarget {
+		b.WriteString(truncateANSI(fmt.Sprintf("  %s name on GitHub: %s%s%s   %s",
+			dim("r"), ansiReverse, m.targetInput+" ", ansiReset,
+			dim("enter to keep, esc to cancel")), m.width) + "\r\n")
+	} else if warning := m.redactWarning(); warning != "" {
 		b.WriteString(warning + "\r\n")
 	}
 	b.WriteString("\r\n")
@@ -344,6 +348,9 @@ func (m *Model) detailFor(r Row, st state) string {
 		return gateHint(r, m.groups, m.forks, m.archived)
 	case stateVisibility, stateRedacted, stateBothWays:
 		var changes []string
+		if r.Renamed {
+			changes = append(changes, "as "+r.Target)
+		}
 		if r.Private != r.SourcePrivate {
 			changes = append(changes, "now "+visibilityName(r.Private))
 		}
@@ -352,6 +359,9 @@ func (m *Model) detailFor(r Row, st state) string {
 		}
 		return "create, " + strings.Join(changes, ", ")
 	default:
+		if r.Renamed {
+			return "create as " + r.Target
+		}
 		return "create"
 	}
 }
@@ -505,8 +515,8 @@ func (m *Model) footerLines(tally string) string {
 	default:
 		// Shortened rather than truncated as the terminal narrows: a hint cut
 		// off mid-word is worse than a shorter list of hints.
-		full := "  space select   v visibility   e redact   a/n all/none   / search   enter migrate   q quit"
-		medium := "  space   v vis   e redact   a/n all   / search   enter go   q quit"
+		full := "  space select   v visibility   e redact   r rename   a/n all/none   / search   enter migrate   q quit"
+		medium := "  space   v vis   e redact   r rename   a/n all   / search   enter go   q quit"
 		short := "  enter go   q quit"
 		hint = dim(pickFitting(m.width, full, medium, short))
 	}
