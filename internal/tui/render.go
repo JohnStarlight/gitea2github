@@ -18,6 +18,8 @@ const (
 	ansiReverse = "\x1b[7m"
 	ansiGreen   = "\x1b[32m"
 	ansiYellow  = "\x1b[33m"
+	ansiAmber   = "\x1b[33m"
+	ansiCyan    = "\x1b[36m"
 )
 
 // View renders the whole screen.
@@ -33,35 +35,63 @@ func (m *Model) View(header string) string {
 	b.WriteString(m.gateBar() + "\r\n")
 	b.WriteString(m.redactBar() + "\r\n\r\n")
 
-	vis := m.visible()
 	body := m.height - chromeHeight
 	if body < 3 {
 		body = 3
 	}
-	start := 0
-	// Keep the cursor in view by scrolling the window rather than the cursor:
-	// the selected row stays where the eye expects it.
-	if m.cursor >= body {
-		start = m.cursor - body + 1
-	}
-	end := start + body
-	if end > len(vis) {
-		end = len(vis)
-	}
 
-	if len(vis) == 0 {
+	written := 0
+	if vis := m.visible(); len(vis) == 0 {
 		b.WriteString(ansiDim + "  no repository matches " + quote(m.query) + ansiReset + "\r\n")
+		written = 1
+	} else {
+		for _, line := range m.listLines(vis, body) {
+			b.WriteString(line + "\r\n")
+			written++
+		}
 	}
-	for pos := start; pos < end; pos++ {
-		b.WriteString(m.renderRow(vis[pos], pos == m.cursor) + "\r\n")
-	}
-	// Pad so the footer does not walk up the screen as the list shortens.
-	for pad := end - start; pad < body; pad++ {
+	// Pad so the footer keeps its place instead of walking up the screen as
+	// the list shortens.
+	for ; written < body; written++ {
 		b.WriteString("\r\n")
 	}
 
 	b.WriteString("\r\n" + m.footer() + "\r\n")
 	return b.String()
+}
+
+// listLines renders as many rows as fit in body lines, keeping the cursor
+// visible.
+//
+// Rows are not all one line tall any more, so the window cannot be found by
+// arithmetic on the cursor index. It is found by walking back from the cursor,
+// adding rows until the next one would not fit, which keeps the cursor on
+// screen whichever direction it was moving and never splits a row across the
+// bottom edge.
+func (m *Model) listLines(vis []int, body int) []string {
+	heights := make([]int, len(vis))
+	rendered := make([][]string, len(vis))
+	for pos, row := range vis {
+		rendered[pos] = m.renderRow(row, pos == m.cursor)
+		heights[pos] = len(rendered[pos])
+	}
+
+	start, used := m.cursor, heights[m.cursor]
+	for start > 0 && used+heights[start-1] <= body {
+		start--
+		used += heights[start]
+	}
+
+	var out []string
+	remaining := body
+	for pos := start; pos < len(vis); pos++ {
+		if heights[pos] > remaining {
+			break
+		}
+		out = append(out, rendered[pos]...)
+		remaining -= heights[pos]
+	}
+	return out
 }
 
 // gateBar renders the three category toggles and the redaction toggle.
@@ -123,72 +153,156 @@ func (m *Model) redactBar() string {
 	return truncateANSI(fmt.Sprintf("%s   %s keep: %s", line, dim("m"), keep), m.width)
 }
 
-// renderRow draws one repository line.
-func (m *Model) renderRow(i int, cursor bool) string {
+// renderRow draws one repository, as one line or two.
+//
+// Returns lines rather than a string because the reason a row is held back --
+// "already on GitHub, left untouched" -- is longer than the space left for it
+// on a narrow terminal, and a reason cut off mid-word is worse than a second
+// line. The layout is computed from the terminal width rather than fixed, so
+// the wrap happens only when it has to.
+func (m *Model) renderRow(i int, cursor bool) []string {
 	r := m.rows[i]
-	eligible := r.eligible(m.groups, m.forks, m.archived)
+	st := m.rowState(r)
+	colour := st.colour()
 
-	mark := " "
+	marker := " "
 	if cursor {
-		mark = ">"
+		marker = ">"
 	}
 
-	var box, name, visibility, detail string
-	switch {
-	case r.Blocked != "":
-		box, detail = dim("-"), dim(r.Blocked)
-		name = dim(pad(r.Name, 34))
-	case !eligible:
-		box, detail = dim("-"), dim(gateHint(r, m.groups, m.forks, m.archived))
-		name = dim(pad(r.Name, 34))
-	case r.Include:
-		box = ansiGreen + "*" + ansiReset
-		name = pad(r.Name, 34)
-		visibility = m.visibilityCell(r)
-		detail = dim("create")
-	default:
-		box = " "
-		name = dim(pad(r.Name, 34))
-		detail = dim("not selected")
+	nameW, visW := m.columns()
+	visibility := ""
+	if st == stateVerbatim || st == stateModified {
+		visibility = m.visibilityWord(r)
 	}
 
-	// The visibility cell carries colour, so it is padded against its
-	// uncoloured width: escape sequences take no columns on screen.
-	visCell := visibility + strings.Repeat(" ", maxInt(0, 22-len(stripANSI(visibility))))
-	line := fmt.Sprintf(" %s %s %s %s %s", mark, box, name, visCell, detail)
-
-	if cursor {
-		return ansiBold + truncateANSI(line, m.width) + ansiReset
+	head := fmt.Sprintf(" %s %s %s", marker, st.symbol(), pad(r.Name, nameW))
+	if visW > 0 {
+		head += " " + pad(visibility, visW)
 	}
-	return truncateANSI(line, m.width)
+
+	detail := m.detailFor(r, st)
+	room := m.width - len(head) - 1
+	if detail == "" {
+		return []string{colour + strings.TrimRight(head, " ") + ansiReset}
+	}
+	if room >= len(detail) {
+		return []string{colour + head + " " + detail + ansiReset}
+	}
+
+	// Too long for the rest of the line: carry it onto a second one, indented
+	// under the name so that it reads as belonging to the row above it.
+	const indent = "      "
+	wrapped := wrapText(detail, maxInt(8, m.width-len(indent)))
+	lines := []string{colour + strings.TrimRight(head, " ") + ansiReset}
+	for _, w := range wrapped {
+		lines = append(lines, colour+indent+w+ansiReset)
+	}
+	return lines
 }
 
-// visibilityCell renders the destination visibility, flagging any change from
-// the source so a deliberate flip is visible and an accidental one is obvious.
-func (m *Model) visibilityCell(r Row) string {
-	word := "public"
-	if r.Private {
-		word = "private"
+// columns works out how wide the name and visibility columns may be.
+//
+// Derived from the terminal rather than fixed: at eighty columns a
+// thirty-four-character name column leaves nothing for the reason, and the
+// reason is the whole point of the rows that have one.
+func (m *Model) columns() (nameW, visW int) {
+	nameW = 34
+	if m.width < 90 {
+		nameW = maxInt(14, m.width/3)
 	}
-	if r.Private == r.SourcePrivate {
-		return word
+
+	// The visibility column only exists when some row on screen would fill it.
+	for _, r := range m.rows {
+		if s := m.rowState(r); s == stateVerbatim || s == stateModified {
+			visW = 20
+			break
+		}
 	}
-	was := "public"
-	if r.SourcePrivate {
-		was = "private"
+	if m.width < 70 {
+		visW = 0
 	}
-	return ansiYellow + word + " (was " + was + ")" + ansiReset
+	return nameW, visW
+}
+
+// detailFor is the right-hand text: what will happen, or why nothing will.
+func (m *Model) detailFor(r Row, st state) string {
+	switch st {
+	case stateInert:
+		if r.Blocked != "" {
+			return r.Blocked
+		}
+		return "not selected"
+	case stateAvailable:
+		return gateHint(r, m.groups, m.forks, m.archived)
+	case stateModified:
+		var changes []string
+		if r.Private != r.SourcePrivate {
+			changes = append(changes, "now "+visibilityName(r.Private))
+		}
+		if m.redact {
+			changes = append(changes, "emails redacted")
+		}
+		return "create, " + strings.Join(changes, ", ")
+	default:
+		return "create"
+	}
+}
+
+// visibilityWord renders the destination visibility for the middle column.
+func (m *Model) visibilityWord(r Row) string {
+	return visibilityName(r.Private)
+}
+
+// visibilityName is the word GitHub uses.
+func visibilityName(private bool) string {
+	if private {
+		return "private"
+	}
+	return "public"
+}
+
+// wrapText breaks s into lines of at most width columns, on word boundaries.
+func wrapText(s string, width int) []string {
+	words := strings.Fields(s)
+	if len(words) == 0 {
+		return nil
+	}
+	var lines []string
+	current := words[0]
+	for _, w := range words[1:] {
+		if len(current)+1+len(w) <= width {
+			current += " " + w
+			continue
+		}
+		lines = append(lines, current)
+		current = w
+	}
+	return append(lines, current)
 }
 
 // footer renders the tally and the key hints.
 func (m *Model) footer() string {
-	selected, skipped, blocked := m.counts()
+	t := m.tally()
 
-	tally := fmt.Sprintf("  %d to migrate   %d skipped   %d unavailable", selected, skipped, blocked)
-	if len(tally) > m.width {
+	// Each count is drawn in the colour of the rows it counts, which turns the
+	// footer into the legend for the list above it -- no separate key to read,
+	// and nothing to fall out of step with the rows.
+	parts := []string{fmt.Sprintf("%s%d verbatim%s", ansiGreen, t.Verbatim, ansiReset)}
+	if t.Modified > 0 {
+		parts = append(parts, fmt.Sprintf("%s%d modified%s", ansiAmber, t.Modified, ansiReset))
+	}
+	if t.Available > 0 {
+		parts = append(parts, fmt.Sprintf("%s%d available%s", ansiCyan, t.Available, ansiReset))
+	}
+	parts = append(parts, fmt.Sprintf("%s%d untouched%s", ansiDim, t.Inert, ansiReset))
+
+	tally := fmt.Sprintf("  %s%d to migrate%s   %s",
+		ansiBold, t.Migrating(), ansiReset, strings.Join(parts, "   "))
+	if len(stripANSI(tally)) > m.width {
 		// On a narrow terminal the count that matters is the one about to be
-		// acted on; the other two are reassurance, not information.
-		tally = fmt.Sprintf("  %d to migrate", selected)
+		// acted on; the breakdown is reassurance, not information.
+		tally = fmt.Sprintf("  %s%d to migrate%s", ansiBold, t.Migrating(), ansiReset)
 	}
 
 	var hint string
@@ -210,7 +324,7 @@ func (m *Model) footer() string {
 	}
 
 	var b strings.Builder
-	b.WriteString(ansiBold + tally + ansiReset + "\r\n")
+	b.WriteString(truncateANSI(tally, m.width) + "\r\n")
 	b.WriteString(truncateANSI(hint, m.width))
 	return b.String()
 }

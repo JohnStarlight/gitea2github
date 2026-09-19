@@ -143,7 +143,7 @@ func (m *Model) updateEmail(k Key) {
 // Enter on nothing selected is far more likely to be a mistake than a request
 // to do nothing, and the user has q for that.
 func (m *Model) confirm() {
-	if selected, _, _ := m.counts(); selected == 0 {
+	if m.tally().Migrating() == 0 {
 		m.note = "nothing selected -- press a to select all, or q to quit"
 		return
 	}
