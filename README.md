@@ -53,8 +53,10 @@ Runs on macOS, Linux, Windows and BSD — anywhere Go and git run. Needs **Go
 1.21+** to build and **git** on `PATH` to run; the `gh` CLI is optional.
 
 Everything is the Go standard library except `golang.org/x/term`, which is used
-only to tell a terminal from a pipe. That is roughly 165 lines of linked code
-from the Go team, and it is the whole dependency tree.
+only to put the terminal into raw mode for the selection screen and to tell a
+terminal from a pipe. That is roughly 165 lines of linked code from the Go
+team, and it is the whole dependency tree — see [what this does with your
+token](#what-this-does-with-your-token).
 
 ## Credentials
 
@@ -166,6 +168,41 @@ There is no prebuilt binary to trust, and no install script piped into a shell.
 **`migrate` and `relink` never change anything without showing the plan and
 asking.** Run either with no flags and it asks what you want, prints exactly what
 it is about to do, and waits for a yes.
+
+On a terminal, `migrate` opens a selection screen instead of a run of questions.
+Nothing is decided until you press Enter, so changing your mind about the forks
+after reading the plan costs a keystroke rather than a restart:
+
+```
+ gitea.zone01.gr  ->  github.com/ivogiake
+   1 [ ] group projects (1)   2 [ ] forks (1)   3 [ ] archived (1)
+   e [x] redact emails   m keep: you@example.com
+
+    *  ivogiake/ascii-art      private                create
+    *  ivogiake/go-reloaded    private                create
+ >  *  ivogiake/lem-in         public (was private)   create
+    -  ivogiake/net-cat                               already on GitHub, left untouched
+    -  ivogiake/old-mirror                            a fork (press 2)
+    -  zone01/groupie-tracker                         a group project (press 1)
+
+   3 to migrate   3 skipped   2 unavailable
+   space select   v visibility   a all   n none   / search   enter migrate   q quit
+```
+
+| Key | Does |
+| --- | --- |
+| `↑` `↓` / `k` `j` | Move |
+| `space` | Include or exclude the row |
+| `v` | Flip that repository between public and private |
+| `a` / `n` | Include or exclude everything on screen |
+| `1` `2` `3` | Include group projects / forks / archived |
+| `e` / `m` | Redact email addresses / choose the address to keep |
+| `/` | Search by name — filters the view, never the selection |
+| `enter` | Go on to the final confirmation |
+| `q` / `esc` | Quit, changing nothing |
+
+Pass `--no-tui` for the numbered prompts instead. That is also what runs
+automatically when there is no terminal.
 
 Prompts are skipped when stdin is not a terminal, so scripts and CI never hang.
 There, a run that would change something refuses and names the flag you want:
@@ -288,6 +325,7 @@ dropped. Without the flag, history transfers byte for byte.
 | --- | --- | --- |
 | `--dry-run` | `false` | Print the plan and stop, asking nothing |
 | `--yes` | `false` | Skip the questions and the confirmation |
+| `--no-tui` | `false` | Use numbered prompts instead of the selection screen |
 | `--only` | all | Comma-separated repository names |
 | `--collaborations` | `false` | Also migrate repositories owned by other Gitea users |
 | `--forks` | `false` | Also migrate forks |
@@ -328,12 +366,17 @@ dropped. Without the flag, history transfers byte for byte.
   interrupted run is simply re-run.
 - **Visibility is mirrored, not guessed.** A repository is created exactly as
   private or public as it is on Gitea unless you change it deliberately, per
-  repository, from the numbered plan in front of you.
+  repository, on the row in front of you.
+- **The selection screen decides nothing on its own.** Quitting it with `q`,
+  `esc` or Ctrl-C changes nothing, and what it hands the migrator is exactly
+  what the tally at the bottom said.
 - **Nothing is deleted.** `relink` renames the Gitea remote rather than removing
   it, so `git push gitea` still works.
 - **Secrets never reach the logs.** Tokens are injected into clone URLs at exec
   time and redacted from all command output.
 - **Ctrl-C is clean.** Interrupting stops new work and still prints the summary.
+  Interrupting the selection screen restores the terminal first, so you are
+  never left in a shell that has stopped echoing what you type.
 
 ## Known limitations
 

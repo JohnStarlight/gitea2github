@@ -36,6 +36,7 @@ import (
 	"github.com/JohnStarlight/gitea2github/internal/migrate"
 	"github.com/JohnStarlight/gitea2github/internal/redact"
 	"github.com/JohnStarlight/gitea2github/internal/relink"
+	"github.com/JohnStarlight/gitea2github/internal/tui"
 	"github.com/JohnStarlight/gitea2github/internal/ui"
 )
 
@@ -286,6 +287,7 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		"visibility of the created repositories: mirror, private, or public")
 	concurrency := fs.Int("jobs", 4, "how many repositories to transfer at once")
 	only := fs.String("only", "", "comma-separated repository names to migrate (default: all visible)")
+	noTUI := fs.Bool("no-tui", false, "choose from numbered prompts instead of the full-screen selector")
 	redactEmails := fs.Bool("redact-emails", false, "replace every email address in the history before pushing")
 	redactDomain := fs.String("redact-domain", redact.DefaultDomain, "domain to point redacted addresses at")
 	var keepEmails stringList
@@ -345,38 +347,111 @@ func cmdMigrate(ctx context.Context, args []string) error {
 
 	fmt.Printf("%s -> github.com/%s  (%d repositories visible)\n", *giteaURL, ghLogin, len(repos))
 
-	// Ask about anything not already decided on the command line. Skipped
-	// entirely for --dry-run, which is a preview of the defaults, and for
-	// --yes, which means "do not ask me anything".
-	if prompt.Interactive() && !*dryRun && !*assumeYes {
-		fmt.Println()
+	// Two routes to the same set of answers. The full-screen selector is the
+	// good one -- nothing is decided until the whole picture is on screen, so
+	// changing your mind about the forks after reading the plan costs a
+	// keystroke rather than a restart. It needs a real terminal, though, so the
+	// numbered prompts below remain the fallback, the answer to --no-tui, and
+	// the only path a script ever takes.
+	useTUI := !*noTUI && !*dryRun && !*assumeYes && tui.Available()
 
-		// The three exclusions are only worth asking about when the account
-		// actually contains something they would exclude. Asking "include
-		// forks?" of someone who has none is noise, and noise is what trains
-		// people to stop reading prompts.
-		if n := countMatching(repos, func(r gitea.Repo) bool {
-			return !r.OwnedBy(giteaCred.Username)
-		}); n > 0 && !given["collaborations"] {
-			*collabs = prompt.Confirm(fmt.Sprintf(
-				"Include %d repositor%s owned by other people (group projects)?",
-				n, plural(n, "y", "ies")), false)
+	var plan []migrate.Result
+	var overrides map[string]bool
+
+	if useTUI {
+		// Probe every repository once with all three gates open, so the screen
+		// already knows which are on GitHub and which have no commits.
+		// Toggling a gate afterwards is then a local recomputation instead of
+		// another sweep of the API, which is what lets the screen respond to a
+		// keystroke instead of to a round trip.
+		probeOptions := migrate.Options{
+			GiteaUser:             giteaCred.Username,
+			GiteaToken:            giteaCred.Token,
+			GitHubUser:            ghLogin,
+			GitHubTok:             ghCred.Token,
+			IncludeCollaborations: true,
+			IncludeForks:          true,
+			IncludeArchived:       true,
+			Visibility:            mode,
+			Concurrency:           *concurrency,
+			DryRun:                true,
 		}
-		if n := countMatching(repos, func(r gitea.Repo) bool { return r.Fork }); n > 0 && !given["forks"] {
-			*forks = prompt.Confirm(fmt.Sprintf(
-				"Include %d fork%s?", n, plural(n, "", "s")), false)
+		fmt.Println("\nChecking what is already on GitHub...")
+		probe := migrate.Run(ctx, repos, probeOptions)
+
+		// The screen holds one address to keep unredacted, so it is seeded
+		// with whatever the user already named -- their own --keep-email if
+		// they passed one, and the address git commits with otherwise. Seeding
+		// it from git while a --keep-email was given would quietly add a
+		// second address to a list the user had already written by hand.
+		seedKeep := gitUserEmail()
+		if len(keepEmails) > 0 {
+			seedKeep = keepEmails[0]
 		}
-		if n := countMatching(repos, func(r gitea.Repo) bool { return r.Archived }); n > 0 && !given["archived"] {
-			*archived = prompt.Confirm(fmt.Sprintf(
-				"Include %d archived repositor%s?", n, plural(n, "y", "ies")), false)
+		model := tui.NewModel(buildRows(repos, probe, giteaCred.Username),
+			*collabs, *forks, *archived, *redactEmails, seedKeep)
+		answered, screenErr := tui.Run(
+			fmt.Sprintf("%s  ->  github.com/%s", *giteaURL, ghLogin), model)
+		if errors.Is(screenErr, tui.ErrCancelled) {
+			fmt.Println("Cancelled; nothing was changed.")
+			return nil
+		}
+		if screenErr != nil {
+			return screenErr
 		}
 
-		if !given["redact-emails"] {
-			*redactEmails = prompt.Confirm("Replace email addresses in the commit history?", *collabs)
+		// Fold the answers back into the flags. The screen has already applied
+		// the three gates itself, so the migrator is handed exactly the chosen
+		// repositories with its own gates opened: two sets of filters
+		// disagreeing about one repository is a bug waiting to happen, and
+		// there is no reason for the second set to exist.
+		selected := answered.Selected()
+		if len(selected) == 0 {
+			fmt.Println("Nothing selected; nothing was changed.")
+			return nil
 		}
-		if *redactEmails && !given["keep-email"] {
-			if own := prompt.Line("  Your own address, to keep linked to GitHub (blank for none):", gitUserEmail()); own != "" {
-				keepEmails = append(keepEmails, own)
+		repos = filterByFullName(repos, selected)
+		*collabs, *forks, *archived = true, true, true
+		*redactEmails = answered.Redact()
+		keepEmails = addAddress(keepEmails, answered.KeepEmail())
+		overrides = answered.VisibilityOverrides()
+
+		// The plan is the probe narrowed to what was chosen. Reusing it rather
+		// than sweeping the API a second time keeps the wait to one.
+		plan = planFromProbe(probe, selected, overrides)
+	} else {
+		// Ask about anything not already decided on the command line. Skipped
+		// entirely for --dry-run, which is a preview of the defaults, and for
+		// --yes, which means "do not ask me anything".
+		if prompt.Interactive() && !*dryRun && !*assumeYes {
+			fmt.Println()
+			// The three exclusions are only worth asking about when the account
+			// actually contains something they would exclude. Asking "include
+			// forks?" of someone who has none is noise, and noise is what trains
+			// people to stop reading prompts.
+			if n := countMatching(repos, func(r gitea.Repo) bool {
+				return !r.OwnedBy(giteaCred.Username)
+			}); n > 0 && !given["collaborations"] {
+				*collabs = prompt.Confirm(fmt.Sprintf(
+					"Include %d repositor%s owned by other people (group projects)?",
+					n, plural(n, "y", "ies")), false)
+			}
+			if n := countMatching(repos, func(r gitea.Repo) bool { return r.Fork }); n > 0 && !given["forks"] {
+				*forks = prompt.Confirm(fmt.Sprintf(
+					"Include %d fork%s?", n, plural(n, "", "s")), false)
+			}
+			if n := countMatching(repos, func(r gitea.Repo) bool { return r.Archived }); n > 0 && !given["archived"] {
+				*archived = prompt.Confirm(fmt.Sprintf(
+					"Include %d archived repositor%s?", n, plural(n, "y", "ies")), false)
+			}
+
+			if !given["redact-emails"] {
+				*redactEmails = prompt.Confirm("Replace email addresses in the commit history?", *collabs)
+			}
+			if *redactEmails && !given["keep-email"] {
+				if own := prompt.Line("  Your own address, to keep linked to GitHub (blank for none):", gitUserEmail()); own != "" {
+					keepEmails = append(keepEmails, own)
+				}
 			}
 		}
 	}
@@ -397,17 +472,22 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		IncludeForks:          *forks,
 		IncludeArchived:       *archived,
 		Visibility:            mode,
+		VisibilityOverride:    overrides,
 		Concurrency:           *concurrency,
 		Mapper:                mapper,
 	}
 
-	// Work out the plan by running the whole pipeline in dry-run mode. Deriving
-	// it from the same code that will execute it is what makes the preview
-	// trustworthy: there is no second implementation to drift out of step.
-	fmt.Println("\nWorking out what would change...")
-	planOptions := options
-	planOptions.DryRun = true
-	plan := migrate.Run(ctx, repos, planOptions)
+	if !useTUI {
+		// Work out the plan by running the whole pipeline in dry-run mode.
+		// Deriving it from the same code that will execute it is what makes the
+		// preview trustworthy: there is no second implementation to drift out
+		// of step.
+		fmt.Println("\nWorking out what would change...")
+		planOptions := options
+		planOptions.DryRun = true
+		plan = migrate.Run(ctx, repos, planOptions)
+	}
+
 	printResults(plan)
 
 	if *dryRun {
@@ -422,11 +502,12 @@ func cmdMigrate(ctx context.Context, args []string) error {
 
 	// Visibility is chosen per repository, from the plan the user is looking
 	// at, because no single answer is right for a whole account. Doing nothing
-	// keeps each repository exactly as it is on Gitea.
-	if prompt.Interactive() && !*assumeYes {
-		if overrides := askVisibilityFlips(prompt, plan, pending); len(overrides) > 0 {
-			options.VisibilityOverride = overrides
-			for name, private := range overrides {
+	// keeps each repository exactly as it is on Gitea. The selector already
+	// offers this on its own rows, so it is only asked here.
+	if !useTUI && prompt.Interactive() && !*assumeYes {
+		if flips := askVisibilityFlips(prompt, plan, pending); len(flips) > 0 {
+			options.VisibilityOverride = flips
+			for name, private := range flips {
 				for i := range plan {
 					if plan[i].Source == name {
 						plan[i].Private = private
@@ -513,6 +594,103 @@ func printResults(results []migrate.Result) {
 		counts[migrate.StatusMigrated], counts[migrate.StatusExists],
 		counts[migrate.StatusSkipped], counts[migrate.StatusFailed],
 		counts[migrate.StatusPlanned])
+}
+
+// buildRows turns the repository list and its dry-run probe into the rows the
+// selection screen displays.
+//
+// The probe supplies the two facts the Gitea listing cannot: whether the
+// repository is already on GitHub, and whether it would fail outright. Both
+// become Blocked, which keeps such rows on screen with their reason rather
+// than quietly dropping them -- "where did my repository go?" is a worse
+// question to leave a user with than a greyed-out line answering it.
+func buildRows(repos []gitea.Repo, probe []migrate.Result, giteaUser string) []tui.Row {
+	byName := make(map[string]migrate.Result, len(probe))
+	for _, r := range probe {
+		byName[r.Source] = r
+	}
+
+	rows := make([]tui.Row, 0, len(repos))
+	for _, repo := range repos {
+		res, ok := byName[repo.FullName]
+		if !ok {
+			continue
+		}
+		row := tui.Row{
+			Name:          repo.FullName,
+			SourcePrivate: res.SourcePrivate,
+			Private:       res.Private,
+			Fork:          repo.Fork,
+			Archived:      repo.Archived,
+			Foreign:       !repo.OwnedBy(giteaUser),
+		}
+		// Anything the probe did not mark as planned cannot be migrated by
+		// this run whatever the user chooses, so the reason it gave is shown
+		// instead of a checkbox.
+		if res.Status != migrate.StatusPlanned {
+			row.Blocked = res.Reason
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// planFromProbe narrows the dry-run probe to the chosen repositories and
+// applies the visibility the user picked for each.
+//
+// Reusing the probe rather than running a second dry run is what keeps the
+// selector to a single wait: the answer to "is this already on GitHub?" does
+// not change while somebody is reading the screen.
+func planFromProbe(probe []migrate.Result, selected []string, overrides map[string]bool) []migrate.Result {
+	chosen := make(map[string]bool, len(selected))
+	for _, name := range selected {
+		chosen[name] = true
+	}
+
+	var plan []migrate.Result
+	for _, res := range probe {
+		if !chosen[res.Source] {
+			continue
+		}
+		if private, ok := overrides[res.Source]; ok {
+			res.Private = private
+		}
+		plan = append(plan, res)
+	}
+	return plan
+}
+
+// addAddress appends addr to list unless it is empty or already there.
+//
+// The screen seeds its one address from the list, so handing the same address
+// straight back must not lengthen it: a duplicate would make redact.Mapper
+// report a count that does not match what the user typed.
+func addAddress(list []string, addr string) []string {
+	if addr == "" {
+		return list
+	}
+	for _, existing := range list {
+		if strings.EqualFold(existing, addr) {
+			return list
+		}
+	}
+	return append(list, addr)
+}
+
+// filterByFullName narrows repos to the given Gitea full names, preserving the
+// original order so the plan and the results table stay in step.
+func filterByFullName(repos []gitea.Repo, names []string) []gitea.Repo {
+	keep := make(map[string]bool, len(names))
+	for _, n := range names {
+		keep[n] = true
+	}
+	var out []gitea.Repo
+	for _, r := range repos {
+		if keep[r.FullName] {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // plannedIndices returns the positions of the rows that will actually be
