@@ -182,16 +182,34 @@ after reading the plan costs a keystroke rather than a restart:
    1 [ ] group projects (1)   2 [ ] forks (1)   3 [ ] archived (1)
    e [x] redact emails   m keep: you@example.com
 
-    *  ivogiake/ascii-art      private                create
-    *  ivogiake/go-reloaded    private                create
- >  *  ivogiake/lem-in         public (was private)   create
-    -  ivogiake/net-cat                               already on GitHub, left untouched
-    -  ivogiake/old-mirror                            a fork (press 2)
-    -  zone01/groupie-tracker                         a group project (press 1)
+ > *  ivogiake/ascii-art       private   create, emails redacted      ← amber
+   *  ivogiake/go-reloaded     private   create, emails redacted      ← amber
+   *  ivogiake/lem-in          public    create, now public, …        ← amber
+   -  ivogiake/net-cat                   already on GitHub            ← grey
+   +  ivogiake/old-mirror                a fork (press 2)             ← cyan
+   +  zone01/groupie-tracker             a group project (press 1)    ← cyan
 
-   3 to migrate   3 skipped   2 unavailable
+   3 to migrate   0 verbatim   3 modified   2 available   2 untouched
    space select   v visibility   a all   n none   / search   enter migrate   q quit
 ```
+
+Each row is drawn whole in the colour of what will happen to it, so the state
+of the list can be read at a glance rather than one row at a time:
+
+| Colour | Symbol | Means |
+| --- | --- | --- |
+| Green | `*` | Will be copied to GitHub exactly as it is on Gitea |
+| Amber | `*` | Will be copied **with something changed** — visibility flipped, or emails redacted |
+| Cyan | `+` | Held back only by a closed gate: one keystroke away |
+| Grey | `-` | Nothing will happen to it — already on GitHub, empty, or unchecked |
+
+The counts along the bottom are drawn in the same colours, so the footer is the
+key to the list above it. Turning redaction on repaints every selected row at
+once, which is the point: it is the setting whose consequence is easiest to
+forget.
+
+The symbols carry the same distinction as the colours, so the screen still
+reads in a monochrome terminal or to someone who cannot separate the hues.
 
 | Key | Does |
 | --- | --- |

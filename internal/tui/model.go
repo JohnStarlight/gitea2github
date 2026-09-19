@@ -192,22 +192,6 @@ func (m *Model) VisibilityOverrides() map[string]bool {
 	return out
 }
 
-// counts tallies the footer numbers: selected, held back by a gate or a
-// checkbox, and impossible.
-func (m *Model) counts() (selected, skipped, blocked int) {
-	for _, r := range m.rows {
-		switch {
-		case r.Blocked != "":
-			blocked++
-		case r.eligible(m.groups, m.forks, m.archived) && r.Include:
-			selected++
-		default:
-			skipped++
-		}
-	}
-	return
-}
-
 // setCategory bulk-applies a gate change to the checkboxes underneath it.
 //
 // Opening a gate re-checks the rows behind it, so that "include forks" means
