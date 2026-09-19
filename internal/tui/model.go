@@ -15,7 +15,6 @@ package tui
 
 import (
 	"sort"
-	"strings"
 )
 
 // Row is one repository as the screen knows it.
@@ -89,13 +88,9 @@ type Model struct {
 	// this address survives all of them.
 	keepEmail string
 
-	// query filters the visible rows by substring. Typing it is a search, not
-	// a selection: filtering the list never changes what is included, so a
-	// half-typed search cannot silently drop a repository from the run.
-	query     string
-	searching bool
-
-	cursor int // index into the visible rows, not into rows
+	// list holds the cursor and the search box, which the repointing screen
+	// needs in exactly the same shape.
+	list
 
 	width, height int
 
@@ -201,9 +196,8 @@ func (m *Model) Gates() (groups, forks, archived bool) {
 // order.
 func (m *Model) visible() []int {
 	var out []int
-	q := strings.ToLower(strings.TrimSpace(m.query))
 	for i, r := range m.rows {
-		if q == "" || strings.Contains(strings.ToLower(r.Name), q) {
+		if m.matches(r.Name) {
 			out = append(out, i)
 		}
 	}

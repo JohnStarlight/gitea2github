@@ -144,30 +144,7 @@ func (m *Model) updateTarget(k Key) {
 	}
 }
 
-// updateSearch handles keys while the search box has focus.
-func (m *Model) updateSearch(k Key) {
-	switch k.Kind {
-	case KeyEnter:
-		m.searching = false
-	case KeyEscape, KeyCtrlC:
-		// Abandoning a search restores the full list rather than leaving it
-		// filtered by a query the user just rejected.
-		m.searching, m.query = false, ""
-		m.clampCursor()
-	case KeyBackspace:
-		if m.query != "" {
-			_, size := lastRune(m.query)
-			m.query = m.query[:len(m.query)-size]
-			m.clampCursor()
-		}
-	case KeySpace:
-		m.query += " "
-		m.clampCursor()
-	case KeyRune:
-		m.query += string(k.Rune)
-		m.clampCursor()
-	}
-}
+func (m *Model) updateSearch(k Key) { m.searchKey(k, len(m.visible())) }
 
 // updateEmail handles keys while the keep-address box has focus.
 func (m *Model) updateEmail(k Key) {
@@ -198,28 +175,9 @@ func (m *Model) confirm() {
 	m.done = true
 }
 
-// move walks the cursor by delta rows, stopping at the ends.
-//
-// Deliberately not wrapping: a list that jumps from bottom to top under a held
-// arrow key makes it easy to toggle a repository you never saw.
-func (m *Model) move(delta int) {
-	m.cursor += delta
-	m.clampCursor()
-}
+func (m *Model) move(delta int) { m.list.move(delta, len(m.visible())) }
 
-func (m *Model) clampCursor() {
-	n := len(m.visible())
-	if n == 0 {
-		m.cursor = 0
-		return
-	}
-	if m.cursor < 0 {
-		m.cursor = 0
-	}
-	if m.cursor >= n {
-		m.cursor = n - 1
-	}
-}
+func (m *Model) clampCursor() { m.clamp(len(m.visible())) }
 
 // currentRow returns the index into m.rows under the cursor, or -1.
 func (m *Model) currentRow() int {
