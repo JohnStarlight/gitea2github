@@ -172,7 +172,7 @@ func TestLongReasonsWrapInsteadOfBeingCut(t *testing.T) {
 		t.Errorf("the reason was lost in wrapping: %q", joined)
 	}
 	for _, l := range lines {
-		if w := len(stripANSI(l)); w > 44 {
+		if w := visibleWidth(l); w > 44 {
 			t.Errorf("wrapped line is %d columns wide, want at most 44: %q", w, stripANSI(l))
 		}
 	}
@@ -314,7 +314,7 @@ func TestFooterFitsAnEightyColumnTerminal(t *testing.T) {
 	m.SetSize(80, 24)
 
 	for _, line := range strings.Split(m.View("gitea.example.com -> github.com/me"), "\r\n") {
-		if w := len(stripANSI(line)); w > 80 {
+		if w := visibleWidth(line); w > 80 {
 			t.Errorf("line is %d columns wide, want at most 80: %q", w, stripANSI(line))
 		}
 	}
@@ -619,7 +619,7 @@ func TestEveryLineFitsAtCommonWidths(t *testing.T) {
 	for _, w := range []int{120, 100, 92, 80, 72, 64, 48, 40} {
 		m := threeWayModel(w)
 		for _, line := range strings.Split(m.View("gitea.example.com -> github.com/me"), "\r\n") {
-			if got := len(stripANSI(line)); got > w {
+			if got := visibleWidth(line); got > w {
 				t.Errorf("at %d columns a line is %d wide: %q", w, got, stripANSI(line))
 			}
 		}

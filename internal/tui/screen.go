@@ -29,6 +29,19 @@ func Available() bool {
 	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 }
 
+// Screen is a model the runner can drive. Both the migration and the relink
+// screens satisfy it, which is what lets them share the terminal handling --
+// the raw mode, the restoration, the signal trap -- rather than each growing
+// its own copy of the one piece of this package that is genuinely dangerous to
+// get wrong.
+type Screen interface {
+	SetSize(w, h int)
+	Update(Key)
+	Done() bool
+	Cancelled() bool
+	View(header string) string
+}
+
 // Run opens the screen, drives it until the user confirms or quits, and
 // returns the model holding their answers.
 //
@@ -37,15 +50,15 @@ func Available() bool {
 // state: a raw terminal left behind shows no typing and no newlines, and the
 // user has to type `reset` blind to recover. Every exit path therefore runs
 // through the same restore, including panics and Ctrl-C.
-func Run(header string, m *Model) (*Model, error) {
+func Run(header string, m Screen) error {
 	if !Available() {
-		return nil, ErrNoTerminal
+		return ErrNoTerminal
 	}
 
 	fd := int(os.Stdin.Fd())
 	state, err := term.MakeRaw(fd)
 	if err != nil {
-		return nil, fmt.Errorf("putting the terminal into raw mode: %w", err)
+		return fmt.Errorf("putting the terminal into raw mode: %w", err)
 	}
 
 	out := os.Stdout
@@ -98,17 +111,17 @@ func Run(header string, m *Model) (*Model, error) {
 		if readErr != nil {
 			if errors.Is(readErr, io.EOF) {
 				// Input ended without an answer, which is not consent.
-				return nil, ErrCancelled
+				return ErrCancelled
 			}
-			return nil, readErr
+			return readErr
 		}
 
 		m.Update(key)
 		if m.Done() {
 			if m.Cancelled() {
-				return nil, ErrCancelled
+				return ErrCancelled
 			}
-			return m, nil
+			return nil
 		}
 	}
 }

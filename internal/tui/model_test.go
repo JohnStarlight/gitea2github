@@ -218,7 +218,7 @@ func TestViewFitsTheTerminalWidth(t *testing.T) {
 	m := NewModel(sample(), true, true, true, true, "me@example.com")
 	m.SetSize(40, 20)
 	for _, line := range strings.Split(m.View("gitea -> github"), "\r\n") {
-		if w := len(stripANSI(line)); w > 40 {
+		if w := visibleWidth(line); w > 40 {
 			t.Errorf("line is %d columns wide, want at most 40: %q", w, stripANSI(line))
 		}
 	}

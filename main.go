@@ -395,7 +395,7 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		}
 		model := tui.NewModel(buildRows(repos, probe, giteaCred.Username),
 			*collabs, *forks, *archived, *redactEmails, seedKeep)
-		answered, screenErr := tui.Run(
+		screenErr := tui.Run(
 			fmt.Sprintf("%s  ->  github.com/%s", forDisplay(*giteaURL), ghLogin), model)
 		if errors.Is(screenErr, tui.ErrCancelled) {
 			fmt.Println("Cancelled; nothing was changed.")
@@ -410,6 +410,7 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		// repositories with its own gates opened: two sets of filters
 		// disagreeing about one repository is a bug waiting to happen, and
 		// there is no reason for the second set to exist.
+		answered := model
 		selected := answered.Selected()
 		if len(selected) == 0 {
 			fmt.Println("Nothing selected; nothing was changed.")
@@ -540,7 +541,92 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	if failed := countStatus(results, migrate.StatusFailed); failed > 0 {
 		return fmt.Errorf("%d repositories failed to migrate", failed)
 	}
+
+	// Moving the repositories is only half the job: the working copies on this
+	// machine still push to Gitea. Offering it here rather than leaving it to
+	// be remembered is the difference between a finished migration and one the
+	// user discovers is unfinished at their next push.
+	if countStatus(results, migrate.StatusMigrated) > 0 {
+		offerRelink(ctx, prompt, *giteaURL, ghLogin, ghCred.Token, *assumeYes)
+	}
 	return nil
+}
+
+// offerRelink asks whether to repoint the local clones, and opens the
+// repointing screen if the answer is yes.
+//
+// Deliberately quiet about its own failures: the migration has already
+// succeeded by this point, and a directory that cannot be scanned is a reason
+// to say so and stop, not to report the whole run as failed.
+func offerRelink(ctx context.Context, prompt *ui.Prompter, giteaURL, ghLogin, ghToken string, assumeYes bool) {
+	// Never without being asked. Repointing rewrites remotes in directories
+	// the migration never touched, so --yes, which is consent to the migration
+	// that was described, is not consent to this.
+	if !prompt.Interactive() || assumeYes {
+		fmt.Println("\nYour local clones still push to Gitea. Run `gitea2github relink .` to repoint them.")
+		return
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return
+	}
+	if !prompt.Confirm(fmt.Sprintf("\nRepoint the clones under %s to GitHub?", shortenPath(cwd)), false) {
+		fmt.Println("Left alone. Run `gitea2github relink <directory>` whenever you want to.")
+		return
+	}
+
+	parsed, err := url.Parse(giteaURL)
+	if err != nil {
+		return
+	}
+	probe, err := relink.Run(ctx, relink.Options{
+		Root: cwd, GiteaHost: parsed.Host, GitHubUser: ghLogin, GitHubTok: ghToken,
+		OldRemoteName: "gitea", Mode: relink.ModeGitHub, Verify: true, DryRun: true,
+	})
+	if err != nil {
+		fmt.Printf("  could not scan %s: %v\n", shortenPath(cwd), err)
+		return
+	}
+	if len(probe) == 0 {
+		fmt.Printf("  no git working copies under %s.\n", shortenPath(cwd))
+		fmt.Println("  Run `gitea2github relink <directory>` against the folder that holds your clones.")
+		return
+	}
+
+	only, modes, cancelled, screenErr := chooseRelink(probe, relink.ModeGitHub, "gitea", cwd, ghLogin)
+	switch {
+	case screenErr != nil:
+		fmt.Printf("  %v\n", screenErr)
+		return
+	case cancelled, len(only) == 0:
+		fmt.Println("  Left alone; no remote was changed.")
+		return
+	}
+
+	plan := relinkPlanFromProbe(probe, only, modes, relink.ModeGitHub, "gitea")
+	printRelinkResults(plan)
+	if !prompt.Confirm(fmt.Sprintf("Repoint %d clone%s?", len(only), plural(len(only), "", "s")), false) {
+		fmt.Println("Cancelled; no remote was changed.")
+		return
+	}
+
+	var logMu sync.Mutex
+	results, err := relink.Run(ctx, relink.Options{
+		Root: cwd, GiteaHost: parsed.Host, GitHubUser: ghLogin, GitHubTok: ghToken,
+		OldRemoteName: "gitea", Mode: relink.ModeGitHub, Verify: true,
+		Only: only, ModeFor: modes,
+		Log: func(format string, args ...any) {
+			logMu.Lock()
+			defer logMu.Unlock()
+			fmt.Printf("  "+format+"\n", args...)
+		},
+	})
+	if err != nil {
+		fmt.Printf("  %v\n", err)
+		return
+	}
+	printRelinkResults(results)
 }
 
 // printResults renders the per-repository outcome table and the tally beneath
@@ -675,6 +761,65 @@ func forDisplay(rawURL string) string {
 	}
 	parsed.User = nil
 	return parsed.String()
+}
+
+// chooseRelink opens the repointing screen and returns what was chosen.
+func chooseRelink(probe []relink.Result, mode, oldName, root, ghLogin string) (
+	only map[string]bool, modes map[string]string, cancelled bool, err error) {
+
+	clones := make([]tui.Clone, 0, len(probe))
+	for _, r := range probe {
+		clone := tui.Clone{Path: r.Path, Display: shortenPath(r.Path), Mode: mode}
+		// Anything the scan did not mark as planned cannot be repointed by
+		// this run, so the reason it gave is shown instead of a destination.
+		if r.Action != "planned" {
+			clone.Blocked = r.Reason
+		}
+		clones = append(clones, clone)
+	}
+
+	model := tui.NewRelinkModel(clones, mode, oldName)
+	header := fmt.Sprintf("%s  ->  github.com/%s", shortenPath(root), ghLogin)
+	switch screenErr := tui.Run(header, model); {
+	case errors.Is(screenErr, tui.ErrCancelled):
+		return nil, nil, true, nil
+	case screenErr != nil:
+		return nil, nil, false, screenErr
+	}
+	only, modes = model.Chosen()
+	return only, modes, false, nil
+}
+
+// relinkPlanFromProbe narrows the scan to the chosen clones and relabels each
+// with the destination picked for it.
+func relinkPlanFromProbe(probe []relink.Result, only map[string]bool,
+	modes map[string]string, fallback, oldName string) []relink.Result {
+
+	var plan []relink.Result
+	for _, r := range probe {
+		if only != nil && !only[r.Path] {
+			continue
+		}
+		if r.Action == "planned" {
+			mode := fallback
+			if m, ok := modes[r.Path]; ok && m != "" {
+				mode = m
+			}
+			r.Reason = "would " + relink.Describe(mode, oldName)
+		}
+		plan = append(plan, r)
+	}
+	return plan
+}
+
+// shortenPath replaces the home directory with ~ so a column of paths stays
+// readable on a narrow terminal.
+func shortenPath(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" || !strings.HasPrefix(path, home) {
+		return path
+	}
+	return "~" + strings.TrimPrefix(path, home)
 }
 
 // buildRows turns the repository list and its dry-run probe into the rows the
@@ -876,6 +1021,7 @@ func cmdRelink(ctx context.Context, args []string) error {
 	verify := fs.Bool("verify", true, "confirm the GitHub repository exists before repointing")
 	pushTo := fs.String("push-to", relink.ModeGitHub,
 		"where relinked clones should push: github, both, or gitea")
+	noTUI := fs.Bool("no-tui", false, "choose from numbered prompts instead of the full-screen selector")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -914,7 +1060,44 @@ func cmdRelink(ctx context.Context, args []string) error {
 
 	// Where a clone should push is the one decision here with consequences, so
 	// ask it outright rather than letting the default decide silently.
-	if prompt.Interactive() && !*dryRun && !*assumeYes && !given["push-to"] {
+	// The screen needs to know what is out there before it can offer anything,
+	// so the scan comes first and is reused as the plan afterwards.
+	probeOptions := relink.Options{
+		Root:          root,
+		GiteaHost:     parsed.Host,
+		GitHubUser:    ghLogin,
+		GitHubTok:     ghCred.Token,
+		OldRemoteName: *oldName,
+		Mode:          *pushTo,
+		Verify:        *verify,
+		DryRun:        true,
+	}
+	fmt.Printf("\nLooking for clones under %s...\n", root)
+	probe, err := relink.Run(ctx, probeOptions)
+	if err != nil {
+		return err
+	}
+
+	var only map[string]bool
+	var modeFor map[string]string
+
+	switch {
+	case !*noTUI && !*dryRun && !*assumeYes && tui.Available():
+		chosen, modes, cancelled, screenErr := chooseRelink(probe, *pushTo, *oldName, root, ghLogin)
+		if screenErr != nil {
+			return screenErr
+		}
+		if cancelled {
+			fmt.Println("Cancelled; nothing was changed.")
+			return nil
+		}
+		if len(chosen) == 0 {
+			fmt.Println("Nothing selected; nothing was changed.")
+			return nil
+		}
+		only, modeFor = chosen, modes
+
+	case prompt.Interactive() && !*dryRun && !*assumeYes && !given["push-to"]:
 		modes := []string{relink.ModeGitHub, relink.ModeBoth, relink.ModeGitea}
 		choice := prompt.Choose("\nWhere should these clones push?", []ui.Option{
 			{Label: "github", Help: "GitHub only; the Gitea remote is kept as \"" + *oldName + "\""},
@@ -932,15 +1115,14 @@ func cmdRelink(ctx context.Context, args []string) error {
 		OldRemoteName: *oldName,
 		Mode:          *pushTo,
 		Verify:        *verify,
+		Only:          only,
+		ModeFor:       modeFor,
 	}
 
-	planOptions := options
-	planOptions.DryRun = true
-	fmt.Println("\nWorking out what would change...")
-	plan, err := relink.Run(ctx, planOptions)
-	if err != nil {
-		return err
-	}
+	// The plan is the scan narrowed to what was chosen. Running the sweep a
+	// second time would ask GitHub about every clone again for an answer that
+	// cannot have changed while somebody was reading the screen.
+	plan := relinkPlanFromProbe(probe, only, modeFor, *pushTo, *oldName)
 	printRelinkResults(plan)
 
 	if *dryRun {
