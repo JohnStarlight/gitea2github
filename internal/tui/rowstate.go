@@ -21,16 +21,26 @@ const (
 	// stands on Gitea. Green.
 	stateVerbatim
 
-	// stateModified is a row that will be copied with something changed:
-	// visibility flipped away from the source, or the commit history rewritten
-	// to redact addresses. Amber.
+	// The three ways a row can be copied with something changed. They are
+	// separate states rather than one, because the two changes are not alike:
+	// redaction is global -- one keystroke rewrites every history in the run
+	// -- while visibility is decided row by row. Collapsing them hid which of
+	// the two a particular row had had done to it.
 	//
-	// It wins over stateVerbatim because it answers a different question. The
-	// other three say whether a repository moves; this one says that what
-	// lands on GitHub is not what sits on Gitea, which is the fact somebody
-	// would most regret missing.
-	stateModified
+	// All three win over stateVerbatim, because they answer a different
+	// question. The other states say whether a repository moves; these say
+	// that what lands on GitHub is not what sits on Gitea, which is the fact
+	// somebody would most regret missing.
+	stateVisibility // visibility flipped away from the source
+	stateRedacted   // history rewritten to hide addresses
+	stateBothWays   // both at once
 )
+
+// changed reports whether a state is one of the three that alter what lands on
+// GitHub.
+func (s state) changed() bool {
+	return s == stateVisibility || s == stateRedacted || s == stateBothWays
+}
 
 // rowState classifies one row against the current gates and the redaction
 // setting.
@@ -44,8 +54,14 @@ func (m *Model) rowState(r Row) state {
 	if !r.Include {
 		return stateInert
 	}
-	if r.Private != r.SourcePrivate || m.redact {
-		return stateModified
+	flipped := r.Private != r.SourcePrivate
+	switch {
+	case flipped && m.redact:
+		return stateBothWays
+	case flipped:
+		return stateVisibility
+	case m.redact:
+		return stateRedacted
 	}
 	return stateVerbatim
 }
@@ -61,8 +77,12 @@ func (s state) colour() string {
 		return ansiCyan
 	case stateVerbatim:
 		return ansiGreen
-	case stateModified:
-		return ansiAmber
+	case stateVisibility:
+		return ansiVisibility
+	case stateRedacted:
+		return ansiRedacted
+	case stateBothWays:
+		return ansiBothWays
 	default:
 		return ansiDim
 	}
@@ -77,7 +97,7 @@ func (s state) symbol() string {
 	switch s {
 	case stateAvailable:
 		return "+"
-	case stateVerbatim, stateModified:
+	case stateVerbatim, stateVisibility, stateRedacted, stateBothWays:
 		return "*"
 	default:
 		return "-"
@@ -86,14 +106,23 @@ func (s state) symbol() string {
 
 // tally counts the rows in each state, for the footer.
 type tally struct {
-	Verbatim  int
-	Modified  int
-	Available int
-	Inert     int
+	Verbatim   int
+	Visibility int
+	Redacted   int
+	BothWays   int
+	Available  int
+	Inert      int
 }
 
 // Migrating is how many repositories the run would actually transfer.
-func (t tally) Migrating() int { return t.Verbatim + t.Modified }
+func (t tally) Migrating() int {
+	return t.Verbatim + t.Changed()
+}
+
+// Changed is how many of those arrive different from how they left.
+func (t tally) Changed() int {
+	return t.Visibility + t.Redacted + t.BothWays
+}
 
 // tally classifies every row once.
 func (m *Model) tally() tally {
@@ -104,8 +133,12 @@ func (m *Model) tally() tally {
 			t.Available++
 		case stateVerbatim:
 			t.Verbatim++
-		case stateModified:
-			t.Modified++
+		case stateVisibility:
+			t.Visibility++
+		case stateRedacted:
+			t.Redacted++
+		case stateBothWays:
+			t.BothWays++
 		default:
 			t.Inert++
 		}

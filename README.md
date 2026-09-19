@@ -189,7 +189,7 @@ after reading the plan costs a keystroke rather than a restart:
    +  ivogiake/old-mirror                a fork (press 2)             ← cyan
    +  zone01/groupie-tracker             a group project (press 1)    ← cyan
 
-   30 to migrate -> 20 unchanged + 10 with changes   6 could add   4 not moving
+   30 to migrate -> 20 unchanged + 4 visibility + 5 redacted + 1 both   6 could add
    space select   v visibility   a all   n none   / search   enter migrate   q quit
 ```
 
@@ -199,15 +199,28 @@ of the list can be read at a glance rather than one row at a time:
 | Colour | Symbol | Means |
 | --- | --- | --- |
 | Green | `*` | Will be copied to GitHub exactly as it is on Gitea |
-| Amber | `*` | Will be copied **with something changed** — visibility flipped, or emails redacted |
+| Orange | `*` | Visibility flipped away from the source |
+| Purple | `*` | History rewritten to redact addresses |
+| Pink | `*` | Both of those at once |
 | Cyan | `+` | Held back only by a closed gate: one keystroke away |
 | Grey | `-` | Nothing will happen to it — already on GitHub, empty, or unchecked |
+
+The two kinds of change are kept apart because they are not alike: redaction is
+global — one keystroke rewrites every history in the run — while visibility is
+decided row by row. A row that has had both done to it is a third thing again,
+and the one most worth a second look.
 
 The counts along the bottom read as arithmetic rather than as a row of
 independent figures — `20 + 10 = 30` can be checked at a glance — and are drawn
 in the same colours, so the footer is the key to the list above it. When there
 is nothing to split they collapse to `30 to migrate, all unchanged`, and a
-category with nothing in it is left out rather than shown as a zero.
+category with nothing in it is left out rather than shown as a zero. On a
+narrow terminal the three kinds of change are summed into one before anything
+is truncated.
+
+The fuller shades need a 256-colour terminal. Where `TERM` does not claim one,
+the screen falls back to the sixteen every terminal has, choosing hues that are
+further apart rather than closer so the distinction survives the downgrade.
 
 Turning redaction on repaints every selected row at once, which is the point:
 it is the setting whose consequence is easiest to forget.

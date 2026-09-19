@@ -37,25 +37,78 @@ func TestRowStateSeparatesCannotFromCouldNot(t *testing.T) {
 	}
 }
 
-// TestModifiedWinsOverVerbatim pins the rule that a row whose contents change
-// is marked as such, whichever way the change was asked for.
-func TestModifiedWinsOverVerbatim(t *testing.T) {
+// TestEachKindOfChangeIsItsOwnState keeps the two changes apart. They are not
+// alike -- redaction is global, visibility is decided row by row -- and a row
+// that has had both done to it is a third thing again.
+func TestEachKindOfChangeIsItsOwnState(t *testing.T) {
 	m := NewModel(stateRows(), false, false, false, false, "")
 	if got := m.rowState(m.rows[0]); got != stateVerbatim {
 		t.Fatalf("an untouched row is %v, want stateVerbatim", got)
 	}
 
-	// A visibility flip is a change.
 	m.rows[0].Private = false
-	if got := m.rowState(m.rows[0]); got != stateModified {
-		t.Errorf("a row flipped to public is %v, want stateModified", got)
+	if got := m.rowState(m.rows[0]); got != stateVisibility {
+		t.Errorf("a row flipped to public is %v, want stateVisibility", got)
 	}
-	m.rows[0].Private = true
 
-	// So is rewriting the history, and it applies to every selected row.
 	m.redact = true
-	if got := m.rowState(m.rows[0]); got != stateModified {
-		t.Errorf("with redaction on, a row is %v, want stateModified", got)
+	if got := m.rowState(m.rows[0]); got != stateBothWays {
+		t.Errorf("a row both flipped and redacted is %v, want stateBothWays", got)
+	}
+
+	m.rows[0].Private = true
+	if got := m.rowState(m.rows[0]); got != stateRedacted {
+		t.Errorf("a row only redacted is %v, want stateRedacted", got)
+	}
+}
+
+// TestTheThreeChangesAreToldApartByColour is the point of splitting them: the
+// screen has to say which change was made, not merely that one was.
+func TestTheThreeChangesAreToldApartByColour(t *testing.T) {
+	seen := map[string]state{}
+	for _, s := range []state{stateVerbatim, stateVisibility, stateRedacted, stateBothWays, stateAvailable, stateInert} {
+		if other, clash := seen[s.colour()]; clash {
+			t.Errorf("states %v and %v share a colour", other, s)
+		}
+		seen[s.colour()] = s
+	}
+}
+
+// TestSixteenColourFallbackKeepsThemApart covers the terminal that cannot show
+// the 256-colour shades: the distinction has to survive the downgrade.
+func TestSixteenColourFallbackKeepsThemApart(t *testing.T) {
+	vis, red, both := ansiVisibility, ansiRedacted, ansiBothWays
+	t.Cleanup(func() { ansiVisibility, ansiRedacted, ansiBothWays = vis, red, both })
+
+	usePalette("xterm", "")
+	for _, c := range []string{ansiVisibility, ansiRedacted, ansiBothWays} {
+		if strings.Contains(c, "38;5;") {
+			t.Errorf("a 256-colour code survived the fallback: %q", c)
+		}
+	}
+	if ansiVisibility == ansiRedacted || ansiRedacted == ansiBothWays || ansiVisibility == ansiBothWays {
+		t.Error("the fallback palette collapsed two changes into one colour")
+	}
+	if ansiVisibility == ansiGreen || ansiRedacted == ansiCyan {
+		t.Error("the fallback palette collides with the states it must stay clear of")
+	}
+}
+
+// TestPaletteChoiceReadsTheEnvironment pins when the fuller palette is used.
+func TestPaletteChoiceReadsTheEnvironment(t *testing.T) {
+	cases := map[[2]string]bool{
+		{"xterm-256color", ""}:  true,
+		{"screen-256color", ""}: true,
+		{"xterm", "truecolor"}:  true,
+		{"xterm", "24bit"}:      true,
+		{"xterm", ""}:           false,
+		{"vt100", ""}:           false,
+		{"", ""}:                false,
+	}
+	for in, want := range cases {
+		if got := supports256(in[0], in[1]); got != want {
+			t.Errorf("supports256(%q, %q) = %v, want %v", in[0], in[1], got, want)
+		}
 	}
 }
 
@@ -64,7 +117,7 @@ func TestModifiedWinsOverVerbatim(t *testing.T) {
 func TestRedactionRepaintsTheWholeList(t *testing.T) {
 	m := NewModel(stateRows(), true, true, true, false, "")
 	before := m.tally()
-	if before.Modified != 0 || before.Verbatim == 0 {
+	if before.Changed() != 0 || before.Verbatim == 0 {
 		t.Fatalf("setup: expected everything verbatim, got %+v", before)
 	}
 
@@ -73,9 +126,9 @@ func TestRedactionRepaintsTheWholeList(t *testing.T) {
 	if after.Verbatim != 0 {
 		t.Errorf("after redaction %d rows are still verbatim, want none", after.Verbatim)
 	}
-	if after.Modified != before.Verbatim {
-		t.Errorf("modified = %d, want the %d rows that were verbatim",
-			after.Modified, before.Verbatim)
+	if after.Changed() != before.Verbatim {
+		t.Errorf("changed = %d, want the %d rows that were verbatim",
+			after.Changed(), before.Verbatim)
 	}
 	if after.Migrating() != before.Migrating() {
 		t.Errorf("redaction changed how many repositories migrate: %d -> %d",
@@ -188,7 +241,7 @@ func TestFooterReadsAsArithmetic(t *testing.T) {
 	m.rows[0].Private = !m.rows[0].SourcePrivate // one row modified
 
 	got := footerText(m)
-	for _, want := range []string{"to migrate", "->", "unchanged", "+", "with changes"} {
+	for _, want := range []string{"to migrate", "->", "unchanged", "+", "visibility"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("footer %q is missing %q", got, want)
 		}
@@ -206,8 +259,8 @@ func TestFooterCollapsesWhenThereIsNothingToSplit(t *testing.T) {
 	}
 
 	m.Update(Key{Kind: KeyRune, Rune: 'e'})
-	if got := footerText(m); !strings.Contains(got, "all with changes") || strings.Contains(got, "+") {
-		t.Errorf("with everything modified the footer is %q, want it collapsed", got)
+	if got := footerText(m); !strings.Contains(got, "all redacted") || strings.Contains(got, "+") {
+		t.Errorf("with everything redacted the footer is %q, want it collapsed", got)
 	}
 }
 
@@ -357,15 +410,15 @@ func TestRedactionToggleIsDrawnInTheColourItProduces(t *testing.T) {
 	m := NewModel(gateRows(), false, false, false, false, "")
 	m.SetSize(100, 24)
 
-	if bar := m.redactBar(); strings.Contains(bar, ansiBrightAmber) {
+	if bar := m.redactBar(); strings.Contains(bar, ansiBrightRedacted) {
 		t.Errorf("redaction is off but its toggle is amber: %q", bar)
 	}
 	m.Update(Key{Kind: KeyRune, Rune: 'e'})
-	if bar := m.redactBar(); !strings.Contains(bar, ansiBrightAmber) {
+	if bar := m.redactBar(); !strings.Contains(bar, ansiBrightRedacted) {
 		t.Errorf("redaction is on but its toggle is not amber: %q", bar)
 	}
-	if got := m.rowState(m.rows[0]); got.colour() != ansiAmber {
-		t.Errorf("with redaction on a row is %v, want amber", got)
+	if got := m.rowState(m.rows[0]); got.colour() != ansiRedacted {
+		t.Errorf("with redaction on a row is %v, want the redaction colour", got)
 	}
 }
 
