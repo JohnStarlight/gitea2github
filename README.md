@@ -267,9 +267,9 @@ repoint them and opens a second screen for the clones it finds:
    1 [x] github   2 [ ] both   3 [ ] gitea   A all
    d directory: ~/Git
 
- > *  ~/Git/ascii-art     github  push and pull use GitHub; Gitea stays as "gitea"
+ > *  ~/Git/ascii-art     github  push and pull use GitHub; Gitea kept as the "gitea" remote
    *  ~/Git/lem-in        both    push reaches both servers; pull still comes from Gitea
-   *  ~/Git/go-reloaded   gitea   push and pull stay on Gitea; GitHub added as "github"
+   *  ~/Git/go-reloaded   gitea   push and pull stay on Gitea; GitHub added as the "github" remote
    -  ~/Git/notes                 origin is not on platform.zone01.gr
    -  ~/Git/quad                  no matching repository on GitHub yet
 
