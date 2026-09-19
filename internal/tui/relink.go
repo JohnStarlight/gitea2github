@@ -438,19 +438,35 @@ func (m *RelinkModel) View(header string) string {
 
 	vis := m.visible()
 	written := 0
-	if len(vis) == 0 {
+	switch {
+	case len(m.clones) == 0:
+		b.WriteString(ansiDim + "  nothing here -- press d to look somewhere else" + ansiReset + "\r\n")
+		written = 1
+	case len(vis) == 0:
 		b.WriteString(ansiDim + "  no clone matches " + quote(m.query) + ansiReset + "\r\n")
 		written = 1
-	} else {
-		start := m.cursor
-		used := 1
-		for start > 0 && used+1 <= body {
-			start--
-			used++
+	default:
+		// Rows are not all one line tall, so the window is found by walking
+		// back from the cursor until the next row would not fit.
+		rendered := make([][]string, len(vis))
+		for pos, idx := range vis {
+			rendered[pos] = m.renderClone(idx, pos == m.cursor)
 		}
-		for pos := start; pos < len(vis) && written < body; pos++ {
-			b.WriteString(m.renderClone(vis[pos], pos == m.cursor) + "\r\n")
-			written++
+		start, used := m.cursor, len(rendered[m.cursor])
+		for start > 0 && used+len(rendered[start-1]) <= body {
+			start--
+			used += len(rendered[start])
+		}
+		remaining := body
+		for pos := start; pos < len(vis); pos++ {
+			if len(rendered[pos]) > remaining {
+				break
+			}
+			for _, line := range rendered[pos] {
+				b.WriteString(line + "\r\n")
+				written++
+			}
+			remaining -= len(rendered[pos])
 		}
 	}
 	for ; written < body; written++ {
@@ -485,6 +501,10 @@ func (m *RelinkModel) destinationBar() string {
 
 // rootBar shows the directory being looked at, and lets it be changed.
 func (m *RelinkModel) rootBar() string {
+	if m.root == "" {
+		// Built without a directory: there is nothing true to say here.
+		return ""
+	}
 	if m.rescan == nil {
 		return truncateANSI("  "+dim("looking at "+m.root), m.width)
 	}
@@ -499,8 +519,12 @@ func (m *RelinkModel) rootBar() string {
 	return truncateANSI(fmt.Sprintf("  %s directory: %s", dim("d"), m.root), m.width)
 }
 
-// renderClone draws one working copy.
-func (m *RelinkModel) renderClone(i int, cursor bool) string {
+// renderClone draws one working copy, as one line or two.
+//
+// The descriptions say what push and pull will do afterwards, which is longer
+// than a marker and worth the room: a sentence cut off mid-word is the one
+// thing worse than a second line.
+func (m *RelinkModel) renderClone(i int, cursor bool) []string {
 	c := m.clones[i]
 
 	marker := " "
@@ -519,17 +543,26 @@ func (m *RelinkModel) renderClone(i int, cursor bool) string {
 		label = modeLabel(c.Mode)
 		detail = relink.Describe(c.Mode, m.oldName)
 	}
+	if cursor {
+		colour += ansiBold
+	}
 
 	nameW := 30
 	if m.width < 90 {
 		nameW = maxInt(12, m.width/3)
 	}
-	line := fmt.Sprintf(" %s %s %s %s %s",
-		marker, symbol, pad(c.Display, nameW), pad(label, 7), detail)
-	if cursor {
-		return colour + ansiBold + truncateANSI(line, m.width) + ansiReset
+	head := fmt.Sprintf(" %s %s %s %s", marker, symbol, pad(c.Display, nameW), pad(label, 7))
+
+	if room := m.width - visibleWidth(head) - 1; room >= len(detail) {
+		return []string{colour + head + " " + detail + ansiReset}
 	}
-	return colour + truncateANSI(line, m.width) + ansiReset
+
+	const indent = "      "
+	lines := []string{colour + strings.TrimRight(head, " ") + ansiReset}
+	for _, w := range wrapText(detail, maxInt(8, m.width-len(indent))) {
+		lines = append(lines, colour+indent+w+ansiReset)
+	}
+	return lines
 }
 
 // relinkFooter counts the clones by destination, in the colours of the rows.
@@ -572,6 +605,7 @@ func (m *RelinkModel) relinkFooter() string {
 	hint := dim(pickFitting(m.width,
 		"  space select   1/2/3 destination   A all   d directory   / search   enter repoint   q quit",
 		"  space   1/2/3 dest   A all   d dir   / search   enter go   q quit",
+		"  space   1/2/3 dest   d dir   enter go   q quit",
 		"  enter go   q quit"))
 	if m.editingRoot {
 		hint = dim(truncate("  type a directory, enter to scan it, esc to keep this one", m.width))

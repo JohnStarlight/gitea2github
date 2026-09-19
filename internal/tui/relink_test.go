@@ -148,7 +148,7 @@ func TestRowsCarryTheWordingOfTheDryRun(t *testing.T) {
 	m := newRelink()
 	m.Update(Key{Kind: KeyRune, Rune: '2'})
 
-	line := stripANSI(m.renderClone(0, true))
+	line := stripANSI(strings.Join(m.renderClone(0, true), " "))
 	if want := relink.Describe(relink.ModeBoth, "gitea"); !strings.Contains(line, want) {
 		t.Errorf("row %q does not carry %q", line, want)
 	}
@@ -391,3 +391,84 @@ func TestScreensWithoutAScannerSaySo(t *testing.T) {
 
 // errNoSuchDir stands in for whatever the filesystem would return.
 var errNoSuchDir = errors.New("no such directory")
+
+// TestDescriptionsSayWhereAPushGoes is the question somebody reading this
+// screen is actually asking. Naming the remotes that move -- "origin goes to
+// GitHub" -- describes the mechanism and leaves both halves of that question
+// unanswered: where does the next push go, and what became of Gitea.
+func TestDescriptionsSayWhereAPushGoes(t *testing.T) {
+	for _, mode := range []string{relink.ModeGitHub, relink.ModeBoth, relink.ModeGitea} {
+		got := relink.Describe(mode, "gitea")
+		if !strings.Contains(got, "push") {
+			t.Errorf("%s: %q does not say where a push goes", mode, got)
+		}
+		if !strings.Contains(strings.ToLower(got), "gitea") {
+			t.Errorf("%s: %q does not say what became of Gitea", mode, got)
+		}
+	}
+
+	// The three have to be told apart by reading, not only by colour.
+	seen := map[string]bool{}
+	for _, mode := range []string{relink.ModeGitHub, relink.ModeBoth, relink.ModeGitea} {
+		d := relink.Describe(mode, "gitea")
+		if seen[d] {
+			t.Errorf("two modes share the description %q", d)
+		}
+		seen[d] = true
+	}
+}
+
+// TestTheKeptRemoteNameAppearsInTheDescription covers --keep-as, which decides
+// the name a push to Gitea will need afterwards.
+func TestTheKeptRemoteNameAppearsInTheDescription(t *testing.T) {
+	if got := relink.Describe(relink.ModeGitHub, "zone01"); !strings.Contains(got, "zone01") {
+		t.Errorf("Describe with a custom name gave %q, want it to name zone01", got)
+	}
+}
+
+// TestLongDescriptionsWrapRatherThanBeingCut matches the migration screen: a
+// sentence cut off mid-word is worse than a second line.
+func TestLongDescriptionsWrapRatherThanBeingCut(t *testing.T) {
+	m := NewRelinkModel(sampleClones(), relink.ModeBoth, "gitea")
+	m.SetSize(58, 22)
+
+	lines := m.renderClone(0, false)
+	if len(lines) < 2 {
+		t.Fatalf("a description did not wrap at 58 columns: %q", lines)
+	}
+	// The continuation is indented, so the text is compared with runs of
+	// whitespace collapsed rather than joined naively.
+	joined := strings.Join(strings.Fields(stripANSI(strings.Join(lines, " "))), " ")
+	if want := relink.Describe(relink.ModeBoth, "gitea"); !strings.Contains(joined, want) {
+		t.Errorf("wrapping lost part of %q: %q", want, joined)
+	}
+	for _, l := range lines {
+		if w := visibleWidth(l); w > 58 {
+			t.Errorf("wrapped line is %d columns wide: %q", w, stripANSI(l))
+		}
+	}
+}
+
+// TestWideTerminalsKeepRowsOnOneLine is the other half.
+func TestWideTerminalsKeepRowsOnOneLine(t *testing.T) {
+	m := NewRelinkModel(sampleClones(), relink.ModeGitHub, "gitea")
+	m.SetSize(120, 22)
+	for i := range m.clones {
+		if lines := m.renderClone(i, false); len(lines) != 1 {
+			t.Errorf("clone %d took %d lines at 120 columns, want 1", i, len(lines))
+		}
+	}
+}
+
+// TestAnEmptyScreenSaysWhatToDo covers the directory with no clones in it,
+// which is otherwise a blank rectangle.
+func TestAnEmptyScreenSaysWhatToDo(t *testing.T) {
+	scan := Rescan(func(string) ([]Clone, error) { return nil, nil })
+	m := NewRelinkModel(nil, relink.ModeGitHub, "gitea").WithRoot("~/empty", scan)
+	m.SetSize(80, 20)
+
+	frame := stripANSI(m.View("github.com/me"))
+	if !strings.Contains(frame, "press d to look somewhere else") {
+		t.Errorf("an empty screen does not say what to do:\n%s", frame)
+	}
+}

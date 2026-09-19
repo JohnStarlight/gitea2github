@@ -267,9 +267,9 @@ repoint them and opens a second screen for the clones it finds:
    1 [x] github   2 [ ] both   3 [ ] gitea   A all
    d directory: ~/Git
 
- > *  ~/Git/ascii-art     github  move origin to GitHub, keeping Gitea as gitea
-   *  ~/Git/lem-in        both    make one push reach both servers
-   *  ~/Git/go-reloaded   gitea   add a github remote, leaving origin on Gitea
+ > *  ~/Git/ascii-art     github  push and pull use GitHub; Gitea stays as "gitea"
+   *  ~/Git/lem-in        both    push reaches both servers; pull still comes from Gitea
+   *  ~/Git/go-reloaded   gitea   push and pull stay on Gitea; GitHub added as "github"
    -  ~/Git/notes                 origin is not on platform.zone01.gr
    -  ~/Git/quad                  no matching repository on GitHub yet
 
@@ -282,6 +282,11 @@ opening it on the wrong folder costs a keystroke rather than a restart. The
 scan walks the disk and asks GitHub about every clone it finds, so the screen
 says what it is doing while it waits, and a path that cannot be read leaves the
 selection you had built up alone.
+
+Each row says what the two commands you will actually type do afterwards,
+rather than which remote gets moved where — the mechanism is not the question
+somebody is deciding on. Long descriptions wrap onto a second line rather than
+being cut off.
 
 The destination is chosen per clone rather than per run: a folder of coursework
 rarely wants one answer for all of it — the group project you still push to
