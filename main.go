@@ -355,8 +355,23 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	// the only path a script ever takes.
 	useTUI := !*noTUI && !*dryRun && !*assumeYes && tui.Available()
 
+	// Destination names are worked out from the whole list before anything
+	// runs, so two repositories that want the same one are told apart here
+	// rather than by whichever worker happened to finish first.
+	targets := migrate.Targets(repos, giteaCred.Username)
+	if clashes := migrate.Collisions(repos); len(clashes) > 0 {
+		for name, sharing := range clashes {
+			fmt.Printf("\n%d repositories are called %q; renaming to keep both:\n",
+				len(sharing), name)
+			for _, full := range sharing {
+				fmt.Printf("  %s -> %s\n", full, targets[full])
+			}
+		}
+	}
+
 	var plan []migrate.Result
 	var overrides map[string]bool
+	var renames map[string]string
 
 	// Which repositories are to have their history rewritten. Left nil by the
 	// numbered prompts, where --redact-emails is all or nothing, and filled in
@@ -379,6 +394,7 @@ func cmdMigrate(ctx context.Context, args []string) error {
 			IncludeArchived:       true,
 			Visibility:            mode,
 			Concurrency:           *concurrency,
+			Target:                targets,
 			DryRun:                true,
 		}
 		fmt.Println("\nChecking what is already on GitHub...")
@@ -393,7 +409,7 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		if len(keepEmails) > 0 {
 			seedKeep = keepEmails[0]
 		}
-		model := tui.NewModel(buildRows(repos, probe, giteaCred.Username),
+		model := tui.NewModel(buildRows(repos, probe, giteaCred.Username, targets),
 			*collabs, *forks, *archived, *redactEmails, seedKeep)
 		screenErr := tui.Run(
 			fmt.Sprintf("%s  ->  github.com/%s", forDisplay(*giteaURL), ghLogin), model)
@@ -422,6 +438,7 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		keepEmails = addAddress(keepEmails, answered.KeepEmail())
 		overrides = answered.VisibilityOverrides()
 		redactOnly = answered.RedactedRepos()
+		renames = answered.Renames()
 
 		// The plan is the probe narrowed to what was chosen. Reusing it rather
 		// than sweeping the API a second time keeps the wait to one.
@@ -467,6 +484,8 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		Concurrency:           *concurrency,
 		Mapper:                mapper,
 		RedactOnly:            redactOnly,
+		Target:                targets,
+		RenameTo:              renames,
 	}
 
 	if !useTUI {
@@ -902,7 +921,8 @@ func shortenPath(path string) string {
 // become Blocked, which keeps such rows on screen with their reason rather
 // than quietly dropping them -- "where did my repository go?" is a worse
 // question to leave a user with than a greyed-out line answering it.
-func buildRows(repos []gitea.Repo, probe []migrate.Result, giteaUser string) []tui.Row {
+func buildRows(repos []gitea.Repo, probe []migrate.Result, giteaUser string,
+	targets map[string]string) []tui.Row {
 	byName := make(map[string]migrate.Result, len(probe))
 	for _, r := range probe {
 		byName[r.Source] = r
@@ -921,7 +941,12 @@ func buildRows(repos []gitea.Repo, probe []migrate.Result, giteaUser string) []t
 			Fork:          repo.Fork,
 			Archived:      repo.Archived,
 			Foreign:       !repo.OwnedBy(giteaUser),
+			Target:        targets[repo.FullName],
 		}
+		// Marked as renamed when the destination differs from the repository's
+		// own name, so the row says where it will land rather than leaving
+		// somebody to notice afterwards.
+		row.Renamed = row.Target != "" && row.Target != repo.Name
 		// Anything the probe did not mark as planned cannot be migrated by
 		// this run whatever the user chooses, so the reason it gave is shown
 		// instead of a checkbox.

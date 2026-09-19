@@ -253,6 +253,7 @@ reads in a monochrome terminal or to someone who cannot separate the hues.
 | `a` / `n` | Include or exclude everything on screen |
 | `1` `2` `3` | Include group projects / forks / archived |
 | `e` / `E` | Redact this repository's history / all of them |
+| `r` | Change the name it will take on GitHub |
 | `m` | Choose the address to keep linked to your GitHub account |
 | `/` | Search by name — filters the view, never the selection |
 | `enter` | Go on to the final confirmation |
@@ -406,6 +407,33 @@ Then repoint the local clones. `relink` asks where they should push:
 gitea2github relink ~/Git                    # asks: github, both, or gitea
 gitea2github relink --push-to=both ~/Git     # answer it in advance
 gitea2github relink --dry-run ~/Git          # plan only
+```
+
+## Two repositories, one name
+
+Gitea namespaces repositories by owner and GitHub does not, so your own
+implementation of an exercise and the group's both want to land as
+`you/quadchecker`. Left alone that is not merely untidy but quietly lossy: the
+first one across creates the repository, the second is reported as already
+present, and one of the two never moves while the summary says everything was
+accounted for. Which one won depended on whichever worker finished first.
+
+The names are worked out from the whole list before anything runs. Yours keeps
+the plain name, since that is what you will look for; the others are told apart
+by whose they are, and the run says so:
+
+```
+2 repositories are called "quadchecker"; renaming to keep both:
+  akasapid/quadchecker -> quadchecker-akasapid
+  ivogiake/quadchecker -> quadchecker
+```
+
+`quadchecker-akasapid` is correct and impersonal, and the person who owns the
+repositories usually has a better word for which one it is — so `r` on the
+selection screen replaces it with anything you like:
+
+```
+ > *  akasapid/quadchecker   private   create as quadchecker-team
 ```
 
 ## What gets skipped, and why

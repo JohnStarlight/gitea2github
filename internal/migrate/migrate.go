@@ -76,6 +76,15 @@ type Options struct {
 	// whatever was public stays public.
 	Visibility VisibilityMode
 
+	// Target is the GitHub name each repository will take, keyed by Gitea full
+	// name, as worked out by Targets. Empty entries and missing ones fall back
+	// to the repository's own name.
+	Target map[string]string
+
+	// RenameTo is a name typed by hand on the selection screen, which beats
+	// both of the above.
+	RenameTo map[string]string
+
 	// VisibilityOverride sets the visibility of individual repositories,
 	// keyed by Gitea full name, and wins over Visibility. It is how the
 	// interactive flow records "this one, the other way round" without
@@ -189,7 +198,7 @@ func Run(ctx context.Context, repos []gitea.Repo, opts Options) []Result {
 // repository cannot abort the other twenty-nine.
 func migrateOne(ctx context.Context, repo gitea.Repo, gh *github.Client, opts Options, workDir string) Result {
 	start := time.Now()
-	target := github.SanitizeName(repo.Name)
+	target := opts.targetFor(repo)
 	res := Result{
 		Source: repo.FullName,
 		Target: opts.GitHubUser + "/" + target,

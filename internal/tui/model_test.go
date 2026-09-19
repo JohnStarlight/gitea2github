@@ -295,3 +295,74 @@ func TestNewModelDoesNotWriteThroughToItsArgument(t *testing.T) {
 		t.Error("the second screen inherited the first one's redaction")
 	}
 }
+
+// TestRenamingARowRecordsOnlyWhatChanged covers the key that lets a name
+// worked out by the program be replaced by one that means something.
+func TestRenamingARowRecordsOnlyWhatChanged(t *testing.T) {
+	rows := []Row{
+		{Name: "me/quadchecker", Target: "quadchecker"},
+		{Name: "them/quadchecker", Foreign: true, Target: "quadchecker-them", Renamed: true},
+	}
+	m := NewModel(rows, true, false, false, false, "")
+	m.SetSize(96, 20)
+
+	// The automatic rename is reported without anybody touching it.
+	if got := m.Renames(); got["them/quadchecker"] != "quadchecker-them" {
+		t.Errorf("Renames = %v, want the worked-out name for the foreign repository", got)
+	}
+	if _, present := m.Renames()["me/quadchecker"]; present {
+		t.Error("a repository keeping its own name was reported as renamed")
+	}
+
+	// And it can be replaced by hand.
+	m.cursor = 1
+	m.press(Key{Kind: KeyRune, Rune: 'r'})
+	for range "them" {
+		m.press(Key{Kind: KeyBackspace})
+	}
+	for _, r := range "team" {
+		m.press(Key{Kind: KeyRune, Rune: r})
+	}
+	m.press(Key{Kind: KeyEnter})
+
+	if got := m.Renames()["them/quadchecker"]; got != "quadchecker-team" {
+		t.Errorf("after renaming, Renames gives %q, want quadchecker-team", got)
+	}
+}
+
+// TestEscapingTheNameBoxKeepsTheOldName is the way out of a half-typed name.
+func TestEscapingTheNameBoxKeepsTheOldName(t *testing.T) {
+	rows := []Row{{Name: "them/quadchecker", Target: "quadchecker-them", Renamed: true}}
+	m := NewModel(rows, false, false, false, false, "")
+	m.SetSize(96, 20)
+
+	m.press(Key{Kind: KeyRune, Rune: 'r'})
+	for _, r := range "nonsense" {
+		m.press(Key{Kind: KeyRune, Rune: r})
+	}
+	m.press(Key{Kind: KeyEscape})
+
+	if got := m.Renames()["them/quadchecker"]; got != "quadchecker-them" {
+		t.Errorf("escaping the box changed the name to %q", got)
+	}
+	if m.Cancelled() {
+		t.Error("escaping the name box quit the whole screen")
+	}
+}
+
+// TestTheRowSaysWhereItWillLand stops a rename happening out of sight.
+func TestTheRowSaysWhereItWillLand(t *testing.T) {
+	rows := []Row{
+		{Name: "them/quadchecker", Target: "quadchecker-them", Renamed: true},
+		{Name: "me/ascii-art", Target: "ascii-art"},
+	}
+	m := NewModel(rows, false, false, false, false, "")
+	m.SetSize(110, 20)
+
+	if got := stripANSI(strings.Join(m.renderRow(0, false), " ")); !strings.Contains(got, "quadchecker-them") {
+		t.Errorf("a renamed row does not say where it lands: %q", got)
+	}
+	if got := stripANSI(strings.Join(m.renderRow(1, false), " ")); strings.Contains(got, "create as") {
+		t.Errorf("a row keeping its name claims to be renamed: %q", got)
+	}
+}
