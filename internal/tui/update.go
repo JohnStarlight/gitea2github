@@ -307,7 +307,7 @@ func lastRune(s string) (rune, int) {
 
 // pageSize is how far PageUp and PageDown jump.
 func (m *Model) pageSize() int {
-	n := m.height - chromeHeight
+	n := m.height - m.chrome()
 	if n < 1 {
 		return 1
 	}

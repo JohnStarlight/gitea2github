@@ -410,12 +410,12 @@ func TestRedactionToggleIsDrawnInTheColourItProduces(t *testing.T) {
 	m := NewModel(gateRows(), false, false, false, false, "")
 	m.SetSize(100, 24)
 
-	if bar := m.redactBar(); strings.Contains(bar, ansiBrightRedacted) {
-		t.Errorf("redaction is off but its toggle is amber: %q", bar)
+	if bar := m.redactBar(); strings.Contains(bar, ansiAlarm) {
+		t.Errorf("redaction is off but its toggle is already alarming: %q", bar)
 	}
 	m.Update(Key{Kind: KeyRune, Rune: 'E'})
-	if bar := m.redactBar(); !strings.Contains(bar, ansiBrightRedacted) {
-		t.Errorf("redaction is on but its toggle is not amber: %q", bar)
+	if bar := m.redactBar(); !strings.Contains(bar, ansiAlarm) {
+		t.Errorf("redaction is on but its toggle is not drawn in alarm red: %q", bar)
 	}
 	if got := m.rowState(m.rows[0]); got.colour() != ansiRedacted {
 		t.Errorf("with redaction on a row is %v, want the redaction colour", got)
@@ -684,5 +684,97 @@ func TestOneLongNameDoesNotEatTheScreen(t *testing.T) {
 	}
 	if got := stripANSI(strings.Join(m.renderRow(1, false), " ")); !strings.Contains(got, "create") {
 		t.Errorf("the second row lost its description: %q", got)
+	}
+}
+
+// TestTheRedactionWarningAppearsOnlyWhenItApplies keeps the loudest line on
+// the screen from becoming wallpaper. A warning that is always up is read
+// once and then stops being read at all.
+func TestTheRedactionWarningAppearsOnlyWhenItApplies(t *testing.T) {
+	m := NewModel(stateRows(), true, true, true, false, "")
+	m.SetSize(96, 24)
+
+	if got := stripANSI(m.redactWarning()); got != "" {
+		t.Errorf("the warning is up with nothing being redacted: %q", got)
+	}
+	m.Update(Key{Kind: KeyRune, Rune: 'E'})
+	if m.redactWarning() == "" {
+		t.Fatal("nothing warns about a run that rewrites history")
+	}
+}
+
+// TestTheWarningSaysBothThingsThatMatter pins the two facts somebody needs
+// before pressing e: that there is no way back, and what kind of work this is
+// suitable for.
+func TestTheWarningSaysBothThingsThatMatter(t *testing.T) {
+	m := NewModel(stateRows(), true, true, true, true, "")
+	m.SetSize(96, 24)
+
+	got := stripANSI(m.redactWarning())
+	if !strings.Contains(got, "CANNOT BE UNDONE") {
+		t.Errorf("the warning does not say it cannot be undone: %q", got)
+	}
+	if !strings.Contains(got, "FINISHED") {
+		t.Errorf("the warning does not say what it is for: %q", got)
+	}
+	if got != strings.ToUpper(got) {
+		t.Errorf("the warning is not in capitals: %q", got)
+	}
+	if !strings.Contains(m.redactWarning(), ansiAlarm) {
+		t.Error("the warning is not drawn in alarm red")
+	}
+}
+
+// TestTheWarningShortensRatherThanBeingCut covers the narrow terminal. Half a
+// sentence in the middle of a warning reads as a glitch.
+func TestTheWarningShortensRatherThanBeingCut(t *testing.T) {
+	for _, w := range []int{100, 80, 60, 44, 30} {
+		m := NewModel(stateRows(), true, true, true, true, "")
+		m.SetSize(w, 24)
+
+		got := m.redactWarning()
+		if visibleWidth(got) > w {
+			t.Errorf("at %d columns the warning is %d wide: %q", w, visibleWidth(got), stripANSI(got))
+		}
+		if !strings.Contains(stripANSI(got), "CANNOT BE UNDONE") {
+			t.Errorf("at %d columns the warning lost its point: %q", w, stripANSI(got))
+		}
+	}
+}
+
+// TestTheWarningTakesItsOwnLineFromTheList checks the chrome grows with it,
+// rather than the warning covering a repository.
+func TestTheWarningTakesItsOwnLineFromTheList(t *testing.T) {
+	m := NewModel(stateRows(), true, true, true, false, "")
+	m.SetSize(96, 24)
+	quiet := m.chrome()
+
+	m.Update(Key{Kind: KeyRune, Rune: 'E'})
+	if loud := m.chrome(); loud != quiet+1 {
+		t.Errorf("the chrome is %d lines with the warning up and %d without", loud, quiet)
+	}
+
+	for _, line := range strings.Split(m.View("gitea -> github"), "\r\n") {
+		if visibleWidth(line) > 96 {
+			t.Errorf("a line spills at 96 columns: %q", stripANSI(line))
+		}
+	}
+}
+
+// TestTheKeptAddressShortensRatherThanBeingCut covers the same rule on the
+// line above it, which was losing its last word.
+func TestTheKeptAddressShortensRatherThanBeingCut(t *testing.T) {
+	for _, w := range []int{120, 96, 84, 70, 50} {
+		m := NewModel(stateRows(), true, true, true, true, "")
+		m.SetSize(w, 24)
+
+		bar := m.redactBar()
+		if visibleWidth(bar) > w {
+			t.Errorf("at %d columns the bar is %d wide: %q", w, visibleWidth(bar), stripANSI(bar))
+		}
+		got := stripANSI(bar)
+		if strings.HasSuffix(got, "addres") || strings.HasSuffix(got, "link") {
+			t.Errorf("at %d columns the hint was cut mid-word: %q", w, got)
+		}
 	}
 }
