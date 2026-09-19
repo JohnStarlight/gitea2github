@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/JohnStarlight/gitea2github/internal/github"
+	"github.com/JohnStarlight/gitea2github/internal/redact"
 )
 
 // Result records what happened to one local clone.
@@ -30,6 +31,17 @@ type Result struct {
 	NewURL string // the GitHub remote we set, if any
 	Action string // "relinked", "skipped", "planned" or "failed"
 	Reason string
+
+	// Redacted reports that the GitHub side holds a rewritten history with the
+	// addresses hidden, so this clone's commits and its commits are different
+	// objects with no ancestor in common.
+	//
+	// It changes what repointing can mean. A clone that keeps the original
+	// history cannot push to the redacted copy -- the push is rejected -- and
+	// forcing it past that would republish exactly the addresses the rewrite
+	// removed. The only coherent outcome is for the clone to take on the
+	// rewritten history and stop being a clone of the Gitea repository.
+	Redacted bool
 }
 
 // Modes for where a relinked clone should push.
@@ -153,6 +165,13 @@ func relinkOne(ctx context.Context, path string, gh *github.Client, opts Options
 			res.Action, res.Reason = "skipped", "no matching repository on GitHub yet"
 			return res
 		}
+		// Asked once the repository is known to exist. A failure here is not
+		// fatal: the worst case is offering the ordinary modes for a redacted
+		// repository, which git will then refuse, rather than refusing to
+		// repoint anything at all.
+		if addrs, err := gh.TipAuthors(ctx, opts.GitHubUser, target); err == nil {
+			res.Redacted = anyRedacted(addrs)
+		}
 	}
 
 	if opts.DryRun {
@@ -197,6 +216,20 @@ func relinkOne(ctx context.Context, path string, gh *github.Client, opts Options
 	}
 
 	return res
+}
+
+// anyRedacted reports whether these addresses came from a redacting rewrite.
+//
+// One is enough. Redaction applies to a whole history, so a repository either
+// went through it or did not; a single address in the shape the redact package
+// produces settles which.
+func anyRedacted(addrs []string) bool {
+	for _, addr := range addrs {
+		if redact.IsRedacted(addr) {
+			return true
+		}
+	}
+	return false
 }
 
 // modeFor resolves the destination for one working copy.

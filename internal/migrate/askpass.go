@@ -45,6 +45,21 @@ func Askpass(args []string, out io.Writer) {
 	fmt.Fprintln(out, os.Getenv(askpassTokenEnv))
 }
 
+// CredentialEnv returns the environment entries that let another package run
+// git against an authenticated remote the same way this one does.
+//
+// Exported so that repointing a clone can fetch from GitHub without a second
+// copy of this mechanism growing beside the first -- and, more to the point,
+// without a second place where somebody might reach for a URL with the token
+// in it.
+func CredentialEnv(user, token string) []string {
+	self, err := os.Executable()
+	if err != nil || token == "" {
+		return []string{"GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "GCM_INTERACTIVE=never"}
+	}
+	return askpassEnv(self, user, token)
+}
+
 // askpassEnv returns the environment entries that point a git subprocess at
 // this binary for its credentials.
 //
