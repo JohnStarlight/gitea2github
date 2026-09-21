@@ -7,14 +7,12 @@ Built for [Zone01](https://platform.zone01.gr) students putting their coursework
 on GitHub, but it works with any Gitea instance.
 
 [Install](#install) ·
-[Credentials](#credentials) ·
+[Getting started](#getting-started) ·
 [Your token](#what-this-does-with-your-token) ·
-[Commands](#commands) ·
-[Examples](#examples) ·
-[Redacting emails](#redacting-email-addresses) ·
-[Flags](#flags) ·
-[Safety](#safety-properties) ·
-[Limitations](#known-limitations)
+[The screen](#the-selection-screen) ·
+[One-way choices](#choices-you-cannot-take-back) ·
+[Without the interface](#without-the-interface) ·
+[Safety](#safety-properties)
 
 ## Why not just do it by hand?
 
@@ -38,7 +36,7 @@ first. Beyond that:
   as they are on Gitea unless you say otherwise, one by one. Descriptions come
   along too, instead of being retyped.
 - **Your clones get repointed** — including [pushing to both
-  servers](#flags) if you are not done with Gitea.
+  servers](#repointing-your-clones) if you are not done with Gitea.
 - **Thirty repositories are one command**, run in parallel, with a summary.
 
 ## Install
@@ -57,6 +55,41 @@ only to put the terminal into raw mode for the selection screen and to tell a
 terminal from a pipe. That is roughly 165 lines of linked code from the Go
 team, and it is the whole dependency tree — see [what this does with your
 token](#what-this-does-with-your-token).
+
+## Getting started
+
+Three commands, in this order. None of them changes anything until you have
+seen what it is about to do and said yes.
+
+```sh
+gitea2github doctor
+```
+
+Checks that both credentials work and have the scopes the rest will need. Run
+it first; a migration that dies halfway through because a token was too narrow
+is a worse way to find out.
+
+```sh
+gitea2github migrate
+```
+
+Opens a screen listing everything on Gitea, with what would happen to each
+repository. Move with the arrows, include or exclude with `space`, press
+`enter` when the tally at the bottom says what you meant. Then it shows the
+plan and asks once more.
+
+```sh
+gitea2github relink
+```
+
+Your clones still push to Gitea after a migration. This scans the directory you
+are standing in and repoints them — one destination per clone, chosen on a
+second screen. `migrate` offers to do this for you when it finishes, so most of
+the time you will not type it.
+
+That is the whole tool. Everything below is detail about what the screens
+offer, and a [last section](#without-the-interface) for people who would rather
+type flags than look at a screen.
 
 ## Credentials
 
@@ -160,22 +193,11 @@ audit is the code that runs.
 **You build it yourself.** `go install` compiles from source on your machine.
 There is no prebuilt binary to trust, and no install script piped into a shell.
 
-## Commands
+## The selection screen
 
-| Command | Takes | What it does |
-| --- | --- | --- |
-| `doctor` | — | Checks both credentials and their scopes |
-| `list` | — | Lists the Gitea repositories it can see, and how each is classified |
-| `migrate` | — | Mirrors repositories to GitHub |
-| `relink` | a **directory** | Repoints the local clones under it away from Gitea, one destination per clone |
-
-**`migrate` and `relink` never change anything without showing the plan and
-asking.** Run either with no flags and it asks what you want, prints exactly what
-it is about to do, and waits for a yes.
-
-On a terminal, `migrate` opens a selection screen instead of a run of questions.
-Nothing is decided until you press Enter, so changing your mind about the forks
-after reading the plan costs a keystroke rather than a restart:
+`migrate` and `relink` each open one. Nothing is decided until you press
+`enter`, so changing your mind about the forks after reading the plan costs a
+keystroke rather than a restart.
 
 ```
  gitea.zone01.gr  ->  github.com/ivogiake                        40 repositories
@@ -183,90 +205,55 @@ after reading the plan costs a keystroke rather than a restart:
    e REDACTING 2 of 4   E all   m keep: you@example.com
    REWRITING HISTORY CANNOT BE UNDONE -- ONLY FOR FINISHED PROJECTS
 
- > *  ivogiake/ascii-art       private   create, emails redacted      ← amber
-   *  ivogiake/go-reloaded     private   create, emails redacted      ← amber
-   *  ivogiake/lem-in          public    create, now public, …        ← amber
-   -  ivogiake/net-cat                   already on GitHub            ← grey
-   +  ivogiake/old-mirror                a fork (press 2)             ← cyan
-   +  zone01/groupie-tracker             a group project (press 1)    ← cyan
+ > *  ivogiake/ascii-art       private   create, emails redacted
+   *  ivogiake/lem-in          public    create, now public
+   -  ivogiake/net-cat                   already on GitHub
+   +  ivogiake/old-mirror                a fork (press 2)
+   +  zone01/groupie-tracker             a group project (press 1)
 
-   30 to migrate -> 20 unchanged + 4 visibility + 5 redacted + 1 visibility & redacted
-   space select   v visibility   a all   n none   / search   enter migrate   q quit
+   30 to migrate -> 20 unchanged + 4 visibility + 5 redacted + 1 both changes
+   space select   v visibility   e redact   r rename   / search   enter migrate   q quit
 ```
 
-Each row is drawn whole in the colour of what will happen to it, so the state
-of the list can be read at a glance rather than one row at a time:
+Each row is drawn whole in the colour of what will happen to it, so the list
+can be read at a glance rather than one row at a time:
 
 | Colour | Symbol | Means |
 | --- | --- | --- |
-| Green | `*` | Will be copied to GitHub exactly as it is on Gitea |
+| Green | `*` | Copied to GitHub exactly as it is on Gitea |
 | Orange | `*` | Visibility flipped away from the source |
-| Purple | `*` | History rewritten to redact addresses |
+| Purple | `*` | History rewritten to hide addresses |
 | Pink | `*` | Both of those at once |
 | Cyan | `+` | Held back only by a closed gate: one keystroke away |
-| Grey | `-` | Nothing will happen to it — already on GitHub, empty, or unchecked |
+| Grey | `-` | Nothing will happen to it |
 
-Both changes are chosen one repository at a time. Redaction used to be a single
-switch over the whole run, which meant that opening a gate or checking one more
-box silently rewrote the history of whatever it brought in — a side effect on
-the one operation that cannot be undone by unchecking a box afterwards. `E`
-still applies it to everything at once when that is what you want, and undoes
-itself when pressed again.
-
-The counts along the bottom read as arithmetic rather than as a row of
-independent figures — `20 + 10 = 30` can be checked at a glance — and are drawn
-in the same colours, so the footer is the key to the list above it. When there
-is nothing to split they collapse to `30 to migrate, all unchanged`, and a
-category with nothing in it is left out rather than shown as a zero.
-
-As the terminal narrows the line gives up the tail first and the breakdown
-last: `could add` and `not moving` only restate what the cyan and grey rows
-already say, while the breakdown says something only this line can. Before
-summing the three kinds into one it shortens the combined label to `both
-changes`, which is unambiguous with the other two named immediately before it.
-
-The fuller shades need a 256-colour terminal. Where `TERM` does not claim one,
-the screen falls back to the sixteen every terminal has, choosing hues that are
-further apart rather than closer so the distinction survives the downgrade.
-
-Redaction's own control is red rather than the colour of the rows it makes, and
-a warning sits under it whenever any repository is being rewritten. It is the
-only choice on either screen that cannot be taken back: the rewritten commits
-are new objects, the originals never reach GitHub, and a clone of the result
-can no longer push to the Gitea repository it came from. That is right for work
-that is finished and wrong for work that is not.
-
-The toggles along the top are drawn in the same colours, one shade brighter, so
-what a gate touches needs no explaining: cyan while its repositories wait
-behind it, green once they are coming along, amber for the one that changes
-what lands on GitHub. A gate whose repositories are every one of them already
-there is greyed out rather than left advertising a count it cannot act on.
-
-The symbols carry the same distinction as the colours, so the screen still
-reads in a monochrome terminal or to someone who cannot separate the hues.
+The toggles along the top take the same colours a shade brighter, so what a
+gate touches needs no explaining. The counts along the bottom take them too,
+which makes the footer the key to the list. The symbols carry the same
+distinctions, so the screen still reads in a monochrome terminal or to someone
+who cannot separate the hues; where `TERM` does not claim 256 colours it falls
+back to the sixteen every terminal has, choosing hues further apart rather than
+closer.
 
 | Key | Does |
 | --- | --- |
 | `↑` `↓` / `k` `j` | Move |
 | `space` | Include or exclude the row |
 | `v` | Flip that repository between public and private |
-| `a` / `n` | Include or exclude everything on screen |
-| `1` `2` `3` | Include group projects / forks / archived |
 | `e` / `E` | Redact this repository's history / all of them |
 | `r` | Change the name it will take on GitHub |
 | `m` | Choose the address to keep linked to your GitHub account |
+| `1` `2` `3` | Include group projects / forks / archived |
+| `a` / `n` | Include or exclude everything on screen |
 | `/` | Search by name — filters the view, never the selection |
 | `enter` | Go on to the final confirmation |
 | `q` / `esc` | Quit, changing nothing |
 
-Pass `--no-tui` for the numbered prompts instead. That is also what runs
-automatically when there is no terminal.
-
 ### Repointing your clones
 
-Moving the repositories is only half the job: the working copies on your
-machine still push to Gitea. When a migration finishes, `migrate` offers to
-repoint them and opens a second screen for the clones it finds:
+Moving the repositories is half the job: the working copies on your machine
+still push to Gitea. When a migration finishes, `migrate` offers to repoint
+them and opens a second screen for the clones it finds:
 
 ```
  github.com/ivogiake                                                5 clones
@@ -277,53 +264,53 @@ repoint them and opens a second screen for the clones it finds:
    *  ~/Git/lem-in        both    push reaches both servers; pull still comes from Gitea
    *  ~/Git/go-reloaded   gitea   push and pull stay on Gitea; GitHub added as the "github" remote
    -  ~/Git/notes                 origin is not on platform.zone01.gr
-   -  ~/Git/quad                  no matching repository on GitHub yet
 
    3 to repoint   1 github   1 both   1 gitea   2 left alone
-   space select   1/2/3 destination   A all   d directory   enter repoint   q quit
 ```
-
-`d` points the screen at another directory and rescans without leaving it, so
-opening it on the wrong folder costs a keystroke rather than a restart. The
-scan walks the disk and asks GitHub about every clone it finds, so the screen
-says what it is doing while it waits, and a path that cannot be read leaves the
-selection you had built up alone.
 
 Each row says what the two commands you will actually type do afterwards,
-rather than which remote gets moved where — the mechanism is not the question
-somebody is deciding on. Long descriptions wrap onto a second line rather than
-being cut off.
+rather than which remote gets moved where. The destination is chosen per clone:
+a folder of coursework rarely wants one answer for all of it — the group
+project you still push to Gitea for audits is not the one you are done with.
+`A` gives every clone on screen the destination of the one under the cursor,
+and `d` points the screen at another directory without leaving it.
 
-The destination is chosen per clone rather than per run: a folder of coursework
-rarely wants one answer for all of it — the group project you still push to
-Gitea for audits is not the one you are done with. `A` gives every clone on
-screen the destination of the one under the cursor, and `--push-to` still sets
-them all from the command line.
+**`both` needs the GitHub repository to be private.** It carries whatever you
+commit to GitHub on every push, addresses and all — contained while the
+destination is private, a continuous publication while it is not.
 
-### Repositories whose history was redacted
+## Choices you cannot take back
 
-Redaction leaves GitHub holding commits that share no ancestor with the clone
-on your machine. That clone cannot push there — git refuses it — and the hint
-git prints in refusing points straight at `--force`, which would republish
-every address the redaction removed.
+Most of what the screens offer is reversible. Including a fork, flipping a
+repository to public, renaming it on GitHub — all of that can be changed
+afterwards by running the tool again, or on GitHub itself.
+
+Two things cannot, and both are drawn in red with the reason spelled out in
+capitals above the list.
+
+### Rewriting history to hide addresses
+
+`e` and `E` replace every email address in a repository's history. The
+rewritten commits are new objects with new hashes; the originals never reach
+GitHub, and commit signatures are dropped because a signature covers the object
+it signed.
+
+It is right for work that is finished and wrong for work that is not. A clone
+of the result can no longer push to the Gitea repository it came from — the
+histories have no ancestor in common — so a repository you are still handing in
+should keep its addresses until you are done with it.
+
+### Taking on a rewritten history
+
+The other side of the same coin. After a redacting migration the clones on your
+machine still hold the original commits, so they can no longer push to what was
+just created on GitHub: the copies there are different objects. Git rejects the
+push, and the hint it prints in rejecting it points at `--force`, which would
+republish every address the rewrite removed.
 
 `relink` recognises those repositories and offers one thing for them: the clone
-takes on GitHub's rewritten history and stops being a clone of the Gitea
+takes GitHub's rewritten history on and stops being a clone of the Gitea
 repository. `both` and `gitea` are greyed out, because neither is possible.
-
-A migration that redacted anything says so before offering, and offers with
-the answer already yes:
-
-```
-2 histories were rewritten. The clones on this machine still hold the original,
-so they can no longer push to GitHub: what is there now is different commits.
-Have the clones under ~/Git take on the rewritten history? [Y/n]
-```
-
-Declining is fine and says what it costs — those clones cannot push to GitHub
-until they take the rewritten history on, though pushing to Gitea still works.
-A migration that rewrote nothing asks the tidier question it always did, with
-the answer still no.
 
 ```
  > *  ~/Git/ascii-art   adopt   takes on GitHub's rewritten history; Gitea remote removed
@@ -333,95 +320,85 @@ the answer still no.
 The history is fetched from GitHub rather than reproduced locally, so the
 result matches by construction rather than by getting a rewrite exactly right.
 Your working tree is untouched — redaction changes who made a commit, not what
-it contains — and a clone with uncommitted changes, or with commits that never
-reached Gitea, is refused until that is dealt with: once it belongs to GitHub
-it can never push to Gitea again.
+it contains. A clone with uncommitted changes, with commits that never reached
+Gitea, or on a branch whose state cannot be compared at all, is refused until
+that is dealt with: once it belongs to GitHub it can never push to Gitea again.
 
-This is the one operation either screen offers that rewrites what is on your
-machine, and it cannot be undone. It is right for work that is finished and
-wrong for work that is not.
+A migration that redacted anything says so before offering, and offers with the
+answer already yes:
 
-`relink` opens the same screen on its own, for clones migrated by hand or on
-another machine. With no directory it scans the one you are standing in; give
-it a path to scan somewhere else. The scan changes nothing, and both the screen
-and the plan name the directory they worked on, so a wrong guess is visible
-before anything acts on it. The offer after a migration never runs unasked:
-`--yes` is consent to the migration that was described, not to rewriting
-remotes in directories it never touched, so an unattended run prints the
-command to use instead.
+```
+2 histories were rewritten. The clones on this machine still hold the original,
+so they can no longer push to GitHub: what is there now is different commits.
+Have the clones under ~/Git take on the rewritten history? [Y/n]
+```
 
-Prompts are skipped when stdin is not a terminal, so scripts and CI never hang.
-There, a run that would change something refuses and names the flag you want:
+Declining is fine and says what it costs. A migration that rewrote nothing asks
+the tidier question it always did, with the answer still no.
 
-| You want | Use |
+## Redacting email addresses
+
+A group project carries the personal address of everyone who ever committed to
+it, and publishing the repository publishes all of them.
+
+Every address becomes a stand-in such as `4f2a91c0de@redacted.invalid`, in both
+places addresses hide: the author and committer headers, and the commit message
+body, where `Co-authored-by:` trailers are just as public.
+
+The replacement is a hash of the original, so one person maps to the same
+stand-in in every repository you migrate — `git shortlog` still separates
+contributors — while nothing of the original survives.
+
+**`--keep-email` names an address of yours**, and rewrites it to your GitHub
+no-reply — `<id>+<login>@users.noreply.github.com`, worked out from the account
+the token belongs to — rather than leaving it as it was.
+
+That distinction matters more than it looks. GitHub attributes a commit to an
+account only when its address is one that account has verified, or its
+no-reply. An address merely left alone — a Gitea no-reply, say — is hidden, but
+shows as nobody: no avatar, no link, no contribution graph. Leaving it alone
+therefore bought attribution only by publishing the real address it was
+supposed to hide.
+
+Rewriting gives both, and several addresses of yours collapse into one author,
+so a history written from two machines does not arrive as two strangers:
+
+```
+john.vogiakelis@gmail.com            -> 259051186+JohnStarlight@users.noreply.github.com
+ivogiake@noreply.platform.zone01.gr  -> 259051186+JohnStarlight@users.noreply.github.com
+basilisalevizos@yahoo.gr             -> ec53e453c0@redacted.invalid
+p.petrakis@hotmail.gr                -> 50e51655ba@redacted.invalid
+```
+
+Every replaced address takes the same shape: ten hexadecimal characters, then
+`@redacted.invalid`. The domain is not configurable, for two reasons.
+
+`.invalid` is reserved by RFC 2606 and can never resolve, so a redacted address
+can never turn out to be a real mailbox belonging to somebody else. A domain
+chosen by whoever ran the migration cannot promise that.
+
+The shape also has to be recognisable later. A repository on GitHub is the only
+record of how it was redacted, and reading that back — which addresses were
+deliberately left alone, and so which ones anything working on that repository
+afterwards has to leave alone too — means telling a redacted address from a
+real one by looking at it. A shape that varied from run to run could not be
+recognised at all.
+
+## What gets skipped, and why
+
+By default the migrator leaves alone anything where "copy it to my account" is
+not obviously right:
+
+| Skipped | Include it with |
 | --- | --- |
-| A preview, changing nothing | `--dry-run` |
-| To go ahead unattended | `--yes` |
+| Repositories owned by another Gitea user | `--collaborations` |
+| Forks | `--forks` |
+| Archived repositories | `--archived` |
+| Empty repositories | never — there is nothing to push |
 
-Every command takes `--gitea-url` (default `https://platform.zone01.gr/git`).
-
-## Examples
-
-```sh
-gitea2github doctor       # do my credentials work, and do they have the right scopes?
-gitea2github migrate      # asks, shows the plan, then asks again before doing it
-```
-
-A session:
-
-```
-Include 3 repositories owned by other people (group projects)? [y/N] n
-Include 2 forks? [y/N] n
-Replace email addresses in the commit history? [y/N] y
-  Your own address, to keep linked to GitHub (blank for none): [me@example.com]
-
-Working out what would change...
-
-  #  STATUS   REPOSITORY                VISIBILITY  DETAIL
-  1  planned  ivogiake/linear-stats     private     would clone, redact emails, create and push
-  2  planned  ivogiake/math-skills      private     would clone, redact emails, create and push
-     exists   ivogiake/go-reloaded                  already on GitHub, left untouched
-     skipped  ppetraki/ascii-art-color              owned by ppetraki (use --collaborations to include)
-
-The repositories above will be created with the visibility shown.
-To flip any, enter its number(s) separated by spaces [Enter to keep them as they are]: 2
-  ivogiake/math-skills  private -> public
-
-Migrate 2 repositories to github.com/JohnStarlight? [y/N]
-```
-
-Questions about exclusions appear only when the account actually contains
-something to exclude — no "include forks?" if you have none. Any flag you pass
-answers its question in advance.
-
-**Visibility mirrors Gitea unless you change it.** Each repository being created
-is numbered, with the visibility it will get; typing its number flips it. Doing
-nothing changes nothing, in either direction.
-
-```sh
-gitea2github list                                    # what can it see?
-gitea2github migrate --dry-run                       # plan only, no questions
-gitea2github migrate --only linear-stats             # one repository
-gitea2github migrate --only linear-stats,go-reloaded  # or several
-gitea2github migrate --visibility=private --yes       # unattended, force all private
-gitea2github migrate --jobs 1                        # slower, kinder to rate limits
-gitea2github migrate --gitea-url https://gitea.example.com
-```
-
-The combination most Zone01 students want — group projects included, without
-publishing anyone's address:
-
-```sh
-gitea2github migrate --collaborations --redact-emails --keep-email you@example.com
-```
-
-Then repoint the local clones. `relink` asks where they should push:
-
-```sh
-gitea2github relink ~/Git                    # asks: github, both, or gitea
-gitea2github relink --push-to=both ~/Git     # answer it in advance
-gitea2github relink --dry-run ~/Git          # plan only
-```
+The collaboration default is the important one: Zone01 group projects live under
+one teammate's account, and republishing theirs under your own name should be a
+deliberate act.
 
 ## Two repositories, one name
 
@@ -450,110 +427,79 @@ selection screen replaces it with anything you like:
  > *  akasapid/quadchecker   private   create as quadchecker-team
 ```
 
-## What gets skipped, and why
+## Without the interface
 
-By default the migrator leaves alone anything where "copy it to my account" is
-not obviously right:
+Everything above assumes you want to look at a screen. If you would rather type
+a command and have it run, every choice the screens make has a flag, and
+`--yes` skips the screen and the confirmation entirely.
 
-| Skipped | Include it with |
-| --- | --- |
-| Repositories owned by another Gitea user | `--collaborations` |
-| Forks | `--forks` |
-| Archived repositories | `--archived` |
-| Empty repositories | never — there is nothing to push |
+This is also what happens automatically when there is no terminal — in a script,
+a container, or a CI job — so the same invocation works in both places. Pass
+`--no-tui` to get the numbered prompts on a terminal too.
 
-The collaboration default is the important one: Zone01 group projects live under
-one teammate's account, and republishing theirs under your own name should be a
-deliberate act.
+A run that would change something and has nobody to ask refuses rather than
+guessing:
 
-## Redacting email addresses
+```
+refusing to change anything without a terminal to confirm on;
+pass --yes to proceed or --dry-run to preview (12 repositories would be migrated)
+```
 
-A group project carries the personal address of everyone who ever committed to
-it, and publishing the repository publishes all of them.
+### Common invocations
 
 ```sh
-gitea2github migrate --redact-emails --keep-email you@example.com
+gitea2github list                                     # what can it see?
+gitea2github migrate --dry-run                        # plan only, changes nothing
+gitea2github migrate --only linear-stats              # one repository
+gitea2github migrate --only linear-stats,go-reloaded  # or several
+gitea2github migrate --visibility=private --yes       # unattended, force all private
+gitea2github migrate --jobs 1                         # slower, kinder to rate limits
+gitea2github migrate --gitea-url https://gitea.example.com
 ```
 
-Every address becomes a stable stand-in such as `4f2a91c0de@redacted.invalid`,
-in **both** places addresses hide: the author and committer headers, and the
-commit message body, where `Co-authored-by:` trailers are just as public.
+The combination most Zone01 students want — group projects included, without
+publishing anyone's address, your own commits still linked to your profile:
 
-`.invalid` is reserved by RFC 2606 and can never resolve, so a redacted address
-can never become someone else's real mailbox. The replacement is a hash of the
-original, so one person maps to the same stand-in in every repository you
-migrate — `git shortlog` still separates contributors — while nothing of the
-original survives. `--keep-email` (repeatable) exempts your own address so your
-commits stay linked to your GitHub profile.
-
-**This rewrites history.** Every commit hash changes, because author and
-committer identities are part of what a commit hashes, and commit signatures are
-dropped. Without the flag, history transfers byte for byte.
-
-`--keep-email` names an address of **yours**. It is rewritten to your GitHub
-no-reply — `<id>+<login>@users.noreply.github.com`, worked out from the account
-the token belongs to — rather than left as it was.
-
-That distinction matters more than it looks. GitHub attributes a commit to an
-account only when its address is one that account has verified, or its
-no-reply. An address merely left alone — a Gitea no-reply, say — is hidden, but
-shows as nobody: no avatar, no link, no contribution graph. Leaving the address
-alone therefore bought attribution only by publishing the real one it was
-supposed to hide.
-
-Rewriting gives both. Several addresses of yours collapse into the one author,
-so a history where you committed from two machines does not arrive as two
-strangers:
-
-```
-john.vogiakelis@gmail.com            -> 259051186+JohnStarlight@users.noreply.github.com
-ivogiake@noreply.platform.zone01.gr  -> 259051186+JohnStarlight@users.noreply.github.com
-basilisalevizos@yahoo.gr             -> ec53e453c0@redacted.invalid
-p.petrakis@hotmail.gr                -> 50e51655ba@redacted.invalid
+```sh
+gitea2github migrate --collaborations --redact-emails \
+  --keep-email you@example.com --yes
 ```
 
-Every replaced address takes the same shape: ten hexadecimal characters, then
-`@redacted.invalid`. The domain is not configurable, for two reasons.
+Then the clones:
 
-`.invalid` is reserved by RFC 2606 and can never resolve, so a redacted address
-can never turn out to be a real mailbox belonging to somebody else. A domain
-chosen by whoever ran the migration cannot promise that.
+```sh
+gitea2github relink                       # the directory you are standing in
+gitea2github relink ~/Git                 # or another one
+gitea2github relink --push-to=both --yes  # answer the destination in advance
+gitea2github relink --dry-run ~/Git       # plan only
+```
 
-The shape also has to be recognisable later. A repository on GitHub is the only
-record of how it was redacted, and reading that back — which addresses were
-deliberately left alone, and so which ones anything working on that repository
-afterwards has to leave alone too — means telling a redacted address from a
-real one by looking at it. A shape that varied from run to run could not be
-recognised at all.
-
-## Flags
-
-**migrate**
+### migrate
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--dry-run` | `false` | Print the plan and stop, asking nothing |
-| `--yes` | `false` | Skip the questions and the confirmation |
-| `--no-tui` | `false` | Use numbered prompts instead of the selection screen |
+| `--yes` | `false` | Skip the screen and the confirmation |
+| `--no-tui` | `false` | Numbered prompts instead of the screen |
 | `--only` | all | Comma-separated repository names |
 | `--collaborations` | `false` | Also migrate repositories owned by other Gitea users |
 | `--forks` | `false` | Also migrate forks |
 | `--archived` | `false` | Also migrate archived repositories |
 | `--visibility` | `mirror` | `mirror` the Gitea setting, or force `private` / `public` |
 | `--jobs` | `4` | Repositories transferred at once |
-| `--redact-emails` | `false` | Replace every email address in the history, in every repository |
+| `--redact-emails` | `false` | Rewrite every history to hide addresses |
 | `--keep-email` | none | An address of yours, rewritten to your GitHub no-reply (repeatable) |
 
-**relink**
+### relink
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--dry-run` | `false` | Print the plan and stop, asking nothing |
-| `--yes` | `false` | Skip the questions and the confirmation |
-| `--push-to` | `github` | Where clones push, for all of them — see below |
-| `--no-tui` | `false` | Use numbered prompts instead of the selection screen |
+| `--yes` | `false` | Skip the screen and the confirmation |
+| `--no-tui` | `false` | Numbered prompts instead of the screen |
+| `--push-to` | `github` | Where clones push, for all of them |
 | `--keep-as` | `gitea` | New name for the old remote (`--push-to=github` only) |
-| `--verify` | `true` | Confirm the GitHub repo exists first |
+| `--verify` | `true` | Confirm the GitHub repository exists first |
 
 | `--push-to` | `origin` fetches | `git push` goes to | Extra remotes |
 | --- | --- | --- | --- |
@@ -561,37 +507,36 @@ recognised at all.
 | `both` | Gitea | **both servers** | `gitea`, `github` |
 | `gitea` | Gitea | Gitea | `github` |
 
-`both` needs the GitHub repository to be **private**, and is refused otherwise.
-It carries whatever you commit to GitHub on every push, addresses and all —
-contained while the destination is private, and a continuous publication while
-it is not. It is also refused for a repository whose history was redacted,
-where the only coherent outcome is for the clone to take that history on.
-
-`doctor` and `list` take no flags of their own. Every command takes
-`--gitea-url`.
+`both` is refused unless the GitHub repository is private, and refused outright
+for a repository whose history was redacted. `doctor` and `list` take no flags
+of their own. Every command takes `--gitea-url`.
 
 ## Safety properties
 
 - **Nothing changes without a confirmation.** The plan comes from running the
-  real pipeline in dry-run mode, not a separate code path, so it cannot drift out
-  of step with what happens.
-- **No prompt is mandatory.** Without a terminal, questions return defaults and a
-  run that would change something stops rather than proceeding unasked.
+  real pipeline in dry-run mode, not a separate code path, so it cannot drift
+  out of step with what happens.
+- **No prompt is mandatory.** Without a terminal, questions return defaults and
+  a run that would change something stops rather than proceeding unasked.
 - **Idempotent.** A repository already on GitHub is reported as `exists`, so an
   interrupted run is simply re-run.
 - **Visibility is mirrored, not guessed.** A repository is created exactly as
-  private or public as it is on Gitea unless you change it deliberately, per
-  repository, on the row in front of you.
-- **The selection screen decides nothing on its own.** Quitting it with `q`,
-  `esc` or Ctrl-C changes nothing, and what it hands the migrator is exactly
-  what the tally at the bottom said.
-- **Nothing is deleted.** `relink` renames the Gitea remote rather than removing
-  it, so `git push gitea` still works.
-- **Secrets never reach the logs.** Tokens are injected into clone URLs at exec
-  time and redacted from all command output.
+  private or public as it is on Gitea unless you change it deliberately, on the
+  row in front of you.
+- **The screens decide nothing on their own.** Quitting with `q`, `esc` or
+  Ctrl-C changes nothing, and what they hand over is exactly what the tally at
+  the bottom said.
+- **Tokens never reach an argument, a URL or a file.** Git is handed a plain
+  address and asks for the credential through `GIT_ASKPASS`, which re-runs this
+  binary and reads it from the environment — so nothing appears in the argument
+  list `ps` publishes, or in the config a clone writes.
+- **The Gitea remote survives unless it cannot.** `relink` renames it rather
+  than deleting it, so `git push gitea` still works. The one exception is a
+  clone taking on a rewritten history, where the old remote is removed because
+  it can no longer be pushed to.
 - **Ctrl-C is clean.** Interrupting stops new work and still prints the summary.
-  Interrupting the selection screen restores the terminal first, so you are
-  never left in a shell that has stopped echoing what you type.
+  Interrupting a screen restores the terminal first, so you are never left in a
+  shell that has stopped echoing what you type.
 
 ## Known limitations
 
