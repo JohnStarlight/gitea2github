@@ -103,16 +103,29 @@ func (c *Client) Identity(ctx context.Context) (Identity, error) {
 // through thirty repositories can be restarted, and the repositories that
 // already made it across are recognised rather than colliding.
 func (c *Client) Exists(ctx context.Context, owner, name string) (bool, error) {
+	_, found, err := c.Lookup(ctx, owner, name)
+	return found, err
+}
+
+// Lookup returns the repository if it is there.
+//
+// The same call Exists makes, with the answer kept rather than thrown away.
+// Whether a repository is private decides what may safely be done with it: a
+// clone that pushes to both servers sends un-redacted commits to GitHub on
+// every push, which is contained while the destination is private and is a
+// continuous publication of addresses while it is not.
+func (c *Client) Lookup(ctx context.Context, owner, name string) (Repo, bool, error) {
 	path := fmt.Sprintf("/repos/%s/%s", url.PathEscape(owner), url.PathEscape(name))
-	err := c.do(ctx, http.MethodGet, path, nil, nil)
+	var out Repo
+	err := c.do(ctx, http.MethodGet, path, nil, &out)
 	if err == nil {
-		return true, nil
+		return out, true, nil
 	}
 	var nf *NotFoundError
 	if errors.As(err, &nf) {
-		return false, nil
+		return Repo{}, false, nil
 	}
-	return false, err
+	return Repo{}, false, err
 }
 
 // NotFoundError reports a 404. It is a distinct type because for Exists a 404

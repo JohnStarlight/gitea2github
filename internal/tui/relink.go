@@ -34,6 +34,11 @@ type Clone struct {
 	// the rewrite removed.
 	Redacted bool
 
+	// Public reports that the GitHub copy is visible to everyone, which rules
+	// out pushing to both servers: every push would carry the addresses in
+	// these commits to a place anybody can read.
+	Public bool
+
 	// Risk is why this clone cannot safely take on that history -- work that
 	// would be lost. Empty when there is none.
 	Risk string
@@ -46,6 +51,23 @@ type Clone struct {
 
 // onlyGitHub reports that this clone has no choice of destination.
 func (c Clone) onlyGitHub() bool { return c.Redacted && c.Blocked == "" }
+
+// allows reports whether a destination is open to this clone, and says why
+// when it is not.
+//
+// Two rules, and both exist because the alternative publishes addresses. A
+// rewritten history admits nothing but taking it on; and pushing to both
+// servers carries every commit made here to GitHub as it is made, which is
+// contained while the destination is private and is not while it is public.
+func (c Clone) allows(mode string) (bool, string) {
+	switch {
+	case c.onlyGitHub() && mode != relink.ModeGitHub:
+		return false, "GitHub holds a rewritten history; this clone can only take it on"
+	case mode == relink.ModeBoth && c.Public:
+		return false, "the GitHub copy is public; pushing to both would publish every address in it"
+	}
+	return true, ""
+}
 
 // Rescan looks for working copies under root and returns them as rows. It is
 // supplied by the caller so the model stays free of I/O and can be driven by a
@@ -373,9 +395,8 @@ func (m *RelinkModel) setMode(mode string) {
 		m.note = m.clones[i].Display + ": " + m.clones[i].Blocked
 		return
 	}
-	if m.clones[i].onlyGitHub() && mode != relink.ModeGitHub {
-		m.note = m.clones[i].Display +
-			": GitHub holds a rewritten history; this clone can only take it on"
+	if ok, why := m.clones[i].allows(mode); !ok {
+		m.note = m.clones[i].Display + ": " + why
 		return
 	}
 	if m.clones[i].Risk != "" {
@@ -396,14 +417,24 @@ func (m *RelinkModel) applyModeToAll() {
 		return
 	}
 	mode := m.clones[i].Mode
+	held := 0
 	for _, j := range m.visible() {
-		// A clone whose history was rewritten keeps its one destination
-		// whatever the bulk key says.
-		if m.clones[j].Blocked == "" && !m.clones[j].onlyGitHub() {
-			m.clones[j].Mode = mode
+		if m.clones[j].Blocked != "" {
+			continue
 		}
+		// A clone that cannot take this destination keeps the one it has,
+		// whatever the bulk key says.
+		if ok, _ := m.clones[j].allows(mode); !ok {
+			held++
+			continue
+		}
+		m.clones[j].Mode = mode
 	}
 	m.note = "every clone on screen now pushes to " + modeLabel(mode)
+	if held > 0 {
+		m.note = fmt.Sprintf("%s -- %d left as %s were, move to one to see why",
+			m.note, held, map[bool]string{true: "it", false: "they"}[held == 1])
+	}
 }
 
 func (m *RelinkModel) setAll(on bool) {
@@ -508,9 +539,9 @@ func (m *RelinkModel) destinationBar() string {
 
 	// A clone whose history was rewritten has one destination, so the other
 	// two are greyed rather than left looking available.
-	locked := false
+	var here Clone
 	if i := m.currentClone(); i >= 0 {
-		locked = m.clones[i].onlyGitHub()
+		here = m.clones[i]
 	}
 
 	var parts []string
@@ -522,7 +553,7 @@ func (m *RelinkModel) destinationBar() string {
 			marker = "[x]"
 		}
 		colour := modeColour(d.mode)
-		if locked && d.mode != relink.ModeGitHub {
+		if ok, _ := here.allows(d.mode); !ok {
 			colour = ansiDim
 		}
 		parts = append(parts, fmt.Sprintf("%s %s%s %s%s",
