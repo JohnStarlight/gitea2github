@@ -18,10 +18,10 @@ func TestAskpassAnswersTheRightPrompt(t *testing.T) {
 	t.Setenv(askpassTokenEnv, "ghp_secret")
 
 	cases := map[string]string{
-		"Username for 'https://gitea.example.com': ":          "JohnStarlight",
-		"username for 'https://gitea.example.com': ":          "JohnStarlight",
+		"Username for 'https://gitea.example.com': ":               "JohnStarlight",
+		"username for 'https://gitea.example.com': ":               "JohnStarlight",
 		"Password for 'https://JohnStarlight@gitea.example.com': ": "ghp_secret",
-		"Password for 'https://x-access-token@github.com': ":  "ghp_secret",
+		"Password for 'https://x-access-token@github.com': ":       "ghp_secret",
 	}
 	for prompt, want := range cases {
 		var out strings.Builder

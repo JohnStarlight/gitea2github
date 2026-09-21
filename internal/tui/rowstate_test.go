@@ -632,7 +632,7 @@ func TestEveryLineFitsAtCommonWidths(t *testing.T) {
 // the screen sat empty to the right.
 func TestWideTerminalsAreUsedRatherThanWasted(t *testing.T) {
 	rows := []Row{
-		{Name: "ivogiake/ascii-art-web-stylize", SourcePrivate: true, Private: false},
+		{Name: "JohnStarlight/ascii-art-web-stylize", SourcePrivate: true, Private: false},
 		{Name: "zone01/quadchecker-team-project", SourcePrivate: true, Private: false},
 	}
 	for _, w := range []int{100, 120, 160, 200} {
