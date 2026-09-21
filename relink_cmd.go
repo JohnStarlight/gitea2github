@@ -255,7 +255,10 @@ func offerRelink(ctx context.Context, prompt *ui.Prompter, giteaURL, ghLogin, gh
 	// work, so repointing them is tidying and the default is no. One that
 	// rewrote them leaves clones that cannot push to what was just created,
 	// which is not tidying and should not be stumbled past.
-	question := fmt.Sprintf("\nRepoint the clones under %s to GitHub?", shortenPath(cwd))
+	// Not "to GitHub": the screen behind this question offers Gitea and both
+	// as well, and naming one of the three here prejudges a choice that is
+	// better made with the list in front of you.
+	question := fmt.Sprintf("\nRepoint the clones under %s?", shortenPath(cwd))
 	def := false
 	if redacted > 0 {
 		fmt.Printf("\n%s rewritten. The clones on this machine still hold the original,\n"+
