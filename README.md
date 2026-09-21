@@ -364,10 +364,10 @@ Rewriting gives both, and several addresses of yours collapse into one author,
 so a history written from two machines does not arrive as two strangers:
 
 ```
-john.vogiakelis@gmail.com            -> 259051186+JohnStarlight@users.noreply.github.com
-ivogiake@noreply.platform.zone01.gr  -> 259051186+JohnStarlight@users.noreply.github.com
-basilisalevizos@yahoo.gr             -> ec53e453c0@redacted.invalid
-p.petrakis@hotmail.gr                -> 50e51655ba@redacted.invalid
+you@example.com                 -> 259051186+JohnStarlight@users.noreply.github.com
+you@noreply.platform.zone01.gr  -> 259051186+JohnStarlight@users.noreply.github.com
+teammate@example.net            -> 7fe87d38c9@redacted.invalid
+classmate@example.org           -> ff2018ab2f@redacted.invalid
 ```
 
 Every replaced address takes the same shape: ten hexadecimal characters, then
@@ -415,16 +415,16 @@ by whose they are, and the run says so:
 
 ```
 2 repositories are called "quadchecker"; renaming to keep both:
-  akasapid/quadchecker -> quadchecker-akasapid
+  teammate/quadchecker -> quadchecker-teammate
   ivogiake/quadchecker -> quadchecker
 ```
 
-`quadchecker-akasapid` is correct and impersonal, and the person who owns the
+`quadchecker-teammate` is correct and impersonal, and the person who owns the
 repositories usually has a better word for which one it is — so `r` on the
 selection screen replaces it with anything you like:
 
 ```
- > *  akasapid/quadchecker   private   create as quadchecker-team
+ > *  teammate/quadchecker   private   create as quadchecker-team
 ```
 
 ## Without the interface

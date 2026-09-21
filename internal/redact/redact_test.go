@@ -214,11 +214,11 @@ func TestKeptAddressesStayRecognisablyReal(t *testing.T) {
 func TestYourOwnAddressesBecomeYourNoReply(t *testing.T) {
 	const noreply = "259051186+JohnStarlight@users.noreply.github.com"
 	m := NewMapper([]string{
-		"john.vogiakelis@gmail.com",
-		"ivogiake@noreply.platform.zone01.gr",
+		"you@example.com",
+		"you@noreply.platform.zone01.gr",
 	}, noreply)
 
-	for _, mine := range []string{"john.vogiakelis@gmail.com", "ivogiake@noreply.platform.zone01.gr"} {
+	for _, mine := range []string{"you@example.com", "you@noreply.platform.zone01.gr"} {
 		got := m.Redacted(mine)
 		if got != noreply {
 			t.Errorf("%s became %q, want the no-reply address", mine, got)
@@ -239,9 +239,10 @@ func TestYourOwnAddressesBecomeYourNoReply(t *testing.T) {
 // written back in lower case reads as a mistake.
 func TestTheReplacementKeepsItsCapitals(t *testing.T) {
 	const noreply = "259051186+JohnStarlight@users.noreply.github.com"
-	m := NewMapper([]string{"John.Vogiakelis@Gmail.com"}, noreply)
+	// Deliberately typed with capitals the other spelling does not have.
+	m := NewMapper([]string{"You@Example.com"}, noreply)
 
-	if got := m.Redacted("john.vogiakelis@gmail.com"); got != noreply {
+	if got := m.Redacted("you@example.com"); got != noreply {
 		t.Errorf("a differently-capitalised address gave %q, want %q", got, noreply)
 	}
 }

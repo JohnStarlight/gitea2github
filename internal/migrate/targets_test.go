@@ -29,13 +29,13 @@ func repo(full string) gitea.Repo {
 func TestCollidingNamesAreToldApart(t *testing.T) {
 	repos := []gitea.Repo{
 		repo("ivogiake/quadchecker"),
-		repo("akasapid/quadchecker"),
+		repo("teammate/quadchecker"),
 		repo("ivogiake/quad"),
 	}
 	got := Targets(repos, "ivogiake")
 	want := map[string]string{
 		"ivogiake/quadchecker": "quadchecker",
-		"akasapid/quadchecker": "quadchecker-akasapid",
+		"teammate/quadchecker": "quadchecker-teammate",
 		"ivogiake/quad":        "quad",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -93,24 +93,24 @@ func TestCollisionsReportsWhatWasRenamedAndWhy(t *testing.T) {
 // TestATypedNameWinsOverEverything covers the rename made on the screen, which
 // is the most specific thing anybody said.
 func TestATypedNameWinsOverEverything(t *testing.T) {
-	r := repo("akasapid/quadchecker")
+	r := repo("teammate/quadchecker")
 	opts := Options{
-		Target:   map[string]string{"akasapid/quadchecker": "quadchecker-akasapid"},
-		RenameTo: map[string]string{"akasapid/quadchecker": "quadchecker-team"},
+		Target:   map[string]string{"teammate/quadchecker": "quadchecker-teammate"},
+		RenameTo: map[string]string{"teammate/quadchecker": "quadchecker-team"},
 	}
 	if got := opts.targetFor(r); got != "quadchecker-team" {
 		t.Errorf("targetFor = %q, want the typed name", got)
 	}
 
 	// A typed name is still sanitised: it becomes a GitHub repository name.
-	opts.RenameTo["akasapid/quadchecker"] = "quad checker/team"
+	opts.RenameTo["teammate/quadchecker"] = "quad checker/team"
 	if got := opts.targetFor(r); got != "quad-checker-team" {
 		t.Errorf("targetFor = %q, want the typed name sanitised", got)
 	}
 
 	// Blank means "no opinion", not "no name".
-	opts.RenameTo["akasapid/quadchecker"] = "   "
-	if got := opts.targetFor(r); got != "quadchecker-akasapid" {
+	opts.RenameTo["teammate/quadchecker"] = "   "
+	if got := opts.targetFor(r); got != "quadchecker-teammate" {
 		t.Errorf("targetFor = %q, want the worked-out name", got)
 	}
 }

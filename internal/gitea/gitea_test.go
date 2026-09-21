@@ -33,7 +33,7 @@ func TestOwnedBy(t *testing.T) {
 	if !r.OwnedBy("IVOGIAKE") {
 		t.Error("Gitea logins are case-insensitive, so the check must be too")
 	}
-	if r.OwnedBy("ppetraki") {
+	if r.OwnedBy("someone-else") {
 		t.Error("a different login must not be reported as owner")
 	}
 }
