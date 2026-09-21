@@ -239,6 +239,7 @@ func TestYourOwnAddressesBecomeYourNoReply(t *testing.T) {
 // written back in lower case reads as a mistake.
 func TestTheReplacementKeepsItsCapitals(t *testing.T) {
 	const noreply = "259051186+JohnStarlight@users.noreply.github.com"
+	// Deliberately typed with capitals the other spelling does not have.
 	m := NewMapper([]string{"You@Example.com"}, noreply)
 
 	if got := m.Redacted("you@example.com"); got != noreply {

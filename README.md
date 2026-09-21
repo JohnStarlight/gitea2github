@@ -364,10 +364,10 @@ Rewriting gives both, and several addresses of yours collapse into one author,
 so a history written from two machines does not arrive as two strangers:
 
 ```
-you@example.com            -> 259051186+JohnStarlight@users.noreply.github.com
+you@example.com                 -> 259051186+JohnStarlight@users.noreply.github.com
 you@noreply.platform.zone01.gr  -> 259051186+JohnStarlight@users.noreply.github.com
-teammate@example.net             -> 7fe87d38c9@redacted.invalid
-classmate@example.org                -> ff2018ab2f@redacted.invalid
+teammate@example.net            -> 7fe87d38c9@redacted.invalid
+classmate@example.org           -> ff2018ab2f@redacted.invalid
 ```
 
 Every replaced address takes the same shape: ten hexadecimal characters, then
