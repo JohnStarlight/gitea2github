@@ -39,7 +39,7 @@ const (
 // Result records the outcome for one repository so the CLI can print a summary
 // instead of making the user scroll back through interleaved worker output.
 type Result struct {
-	Source string // Gitea full name, e.g. "ivogiake/linear-stats"
+	Source string // Gitea full name, e.g. "JohnStarlight/linear-stats"
 	Target string // GitHub full name, e.g. "JohnStarlight/linear-stats"
 
 	// SourcePrivate and Private are the visibility on Gitea and the visibility

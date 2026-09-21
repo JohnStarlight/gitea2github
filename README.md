@@ -200,15 +200,15 @@ There is no prebuilt binary to trust, and no install script piped into a shell.
 keystroke rather than a restart.
 
 ```
- gitea.zone01.gr  ->  github.com/ivogiake                        40 repositories
+ gitea.zone01.gr  ->  github.com/JohnStarlight                        40 repositories
    1 [ ] group projects (1)   2 [ ] forks (1)   3 [ ] archived (1)
    e REDACTING 2 of 4   E all   m keep: you@example.com
    REWRITING HISTORY CANNOT BE UNDONE -- ONLY FOR FINISHED PROJECTS
 
- > *  ivogiake/ascii-art       private   create, emails redacted
-   *  ivogiake/lem-in          public    create, now public
-   -  ivogiake/net-cat                   already on GitHub
-   +  ivogiake/old-mirror                a fork (press 2)
+ > *  JohnStarlight/ascii-art       private   create, emails redacted
+   *  JohnStarlight/lem-in          public    create, now public
+   -  JohnStarlight/net-cat                   already on GitHub
+   +  JohnStarlight/old-mirror                a fork (press 2)
    +  zone01/groupie-tracker             a group project (press 1)
 
    30 to migrate -> 20 unchanged + 4 visibility + 5 redacted + 1 both changes
@@ -256,7 +256,7 @@ still push to Gitea. When a migration finishes, `migrate` offers to repoint
 them and opens a second screen for the clones it finds:
 
 ```
- github.com/ivogiake                                                5 clones
+ github.com/JohnStarlight                                                5 clones
    1 [x] github   2 [ ] both   3 [ ] gitea   A all
    d directory: ~/Git
 
@@ -416,7 +416,7 @@ by whose they are, and the run says so:
 ```
 2 repositories are called "quadchecker"; renaming to keep both:
   teammate/quadchecker -> quadchecker-teammate
-  ivogiake/quadchecker -> quadchecker
+  JohnStarlight/quadchecker -> quadchecker
 ```
 
 `quadchecker-teammate` is correct and impersonal, and the person who owns the

@@ -28,15 +28,15 @@ func repo(full string) gitea.Repo {
 // was accounted for.
 func TestCollidingNamesAreToldApart(t *testing.T) {
 	repos := []gitea.Repo{
-		repo("ivogiake/quadchecker"),
+		repo("JohnStarlight/quadchecker"),
 		repo("teammate/quadchecker"),
-		repo("ivogiake/quad"),
+		repo("JohnStarlight/quad"),
 	}
-	got := Targets(repos, "ivogiake")
+	got := Targets(repos, "JohnStarlight")
 	want := map[string]string{
-		"ivogiake/quadchecker": "quadchecker",
-		"teammate/quadchecker": "quadchecker-teammate",
-		"ivogiake/quad":        "quad",
+		"JohnStarlight/quadchecker": "quadchecker",
+		"teammate/quadchecker":      "quadchecker-teammate",
+		"JohnStarlight/quad":        "quad",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Targets = %v, want %v", got, want)

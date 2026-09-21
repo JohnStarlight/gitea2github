@@ -23,7 +23,7 @@ import (
 // that toggling a filter is a pure re-computation rather than another round
 // trip to GitHub.
 type Row struct {
-	Name          string // Gitea full name, e.g. "ivogiake/lem-in"
+	Name          string // Gitea full name, e.g. "JohnStarlight/lem-in"
 	SourcePrivate bool   // visibility on Gitea
 	Private       bool   // visibility the copy would be created with
 	Fork          bool
