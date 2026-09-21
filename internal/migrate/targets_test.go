@@ -35,7 +35,7 @@ func TestCollidingNamesAreToldApart(t *testing.T) {
 	got := Targets(repos, "JohnStarlight")
 	want := map[string]string{
 		"JohnStarlight/quadchecker": "quadchecker",
-		"teammate/quadchecker": "quadchecker-teammate",
+		"teammate/quadchecker":      "quadchecker-teammate",
 		"JohnStarlight/quad":        "quad",
 	}
 	if !reflect.DeepEqual(got, want) {
