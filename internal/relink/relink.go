@@ -33,6 +33,11 @@ type Result struct {
 	Action string // "relinked", "skipped", "planned" or "failed"
 	Reason string
 
+	// Public reports that the GitHub copy is visible to everyone, which
+	// decides whether this clone may push to both servers at once. See
+	// ModeBoth.
+	Public bool
+
 	// Redacted reports that the GitHub side holds a rewritten history with the
 	// addresses hidden, so this clone's commits and its commits are different
 	// objects with no ancestor in common.
@@ -195,7 +200,7 @@ func relinkOne(ctx context.Context, path string, gh *github.Client, opts Options
 	res.NewURL = fmt.Sprintf("https://github.com/%s/%s.git", opts.GitHubUser, target)
 
 	if opts.Verify && gh != nil {
-		exists, err := gh.Exists(ctx, opts.GitHubUser, target)
+		repo, exists, err := gh.Lookup(ctx, opts.GitHubUser, target)
 		if err != nil {
 			res.Action, res.Reason = "failed", fmt.Sprintf("checking GitHub: %v", err)
 			return res
@@ -204,6 +209,7 @@ func relinkOne(ctx context.Context, path string, gh *github.Client, opts Options
 			res.Action, res.Reason = "skipped", "no matching repository on GitHub yet"
 			return res
 		}
+		res.Public = !repo.Private
 		// Asked once the repository is known to exist. A failure here is not
 		// fatal: the worst case is offering the ordinary modes for a redacted
 		// repository, which git will then refuse, rather than refusing to
@@ -222,6 +228,17 @@ func relinkOne(ctx context.Context, path string, gh *github.Client, opts Options
 	if res.Redacted && mode != ModeGitHub {
 		res.Action = "skipped"
 		res.Reason = "GitHub holds a rewritten history; only --push-to=github is possible"
+		return res
+	}
+
+	// Pushing to both servers sends whatever is committed here to GitHub on
+	// every push, addresses and all. That is contained while the destination
+	// is private and is a continuous publication while it is not, so the mode
+	// is not offered for a public repository.
+	if mode == ModeBoth && res.Public {
+		res.Action = "skipped"
+		res.Reason = "pushing to both would publish every address to a public repository; " +
+			"make it private first, or push to one server"
 		return res
 	}
 

@@ -178,16 +178,16 @@ Nothing is decided until you press Enter, so changing your mind about the forks
 after reading the plan costs a keystroke rather than a restart:
 
 ```
- gitea.zone01.gr  ->  github.com/ivogiake                        40 repositories
+ gitea.zone01.gr  ->  github.com/JohnStarlight                        40 repositories
    1 [ ] group projects (1)   2 [ ] forks (1)   3 [ ] archived (1)
    e REDACTING 2 of 4   E all   m keep: you@example.com
    REWRITING HISTORY CANNOT BE UNDONE -- ONLY FOR FINISHED PROJECTS
 
- > *  ivogiake/ascii-art       private   create, emails redacted      ← amber
-   *  ivogiake/go-reloaded     private   create, emails redacted      ← amber
-   *  ivogiake/lem-in          public    create, now public, …        ← amber
-   -  ivogiake/net-cat                   already on GitHub            ← grey
-   +  ivogiake/old-mirror                a fork (press 2)             ← cyan
+ > *  JohnStarlight/ascii-art       private   create, emails redacted      ← amber
+   *  JohnStarlight/go-reloaded     private   create, emails redacted      ← amber
+   *  JohnStarlight/lem-in          public    create, now public, …        ← amber
+   -  JohnStarlight/net-cat                   already on GitHub            ← grey
+   +  JohnStarlight/old-mirror                a fork (press 2)             ← cyan
    +  zone01/groupie-tracker             a group project (press 1)    ← cyan
 
    30 to migrate -> 20 unchanged + 4 visibility + 5 redacted + 1 visibility & redacted
@@ -269,7 +269,7 @@ machine still push to Gitea. When a migration finishes, `migrate` offers to
 repoint them and opens a second screen for the clones it finds:
 
 ```
- github.com/ivogiake                                                5 clones
+ github.com/JohnStarlight                                                5 clones
    1 [x] github   2 [ ] both   3 [ ] gitea   A all
    d directory: ~/Git
 
@@ -364,14 +364,14 @@ Replace email addresses in the commit history? [y/N] y
 Working out what would change...
 
   #  STATUS   REPOSITORY                VISIBILITY  DETAIL
-  1  planned  ivogiake/linear-stats     private     would clone, redact emails, create and push
-  2  planned  ivogiake/math-skills      private     would clone, redact emails, create and push
-     exists   ivogiake/go-reloaded                  already on GitHub, left untouched
-     skipped  ppetraki/ascii-art-color              owned by ppetraki (use --collaborations to include)
+  1  planned  JohnStarlight/linear-stats     private     would clone, redact emails, create and push
+  2  planned  JohnStarlight/math-skills      private     would clone, redact emails, create and push
+     exists   JohnStarlight/go-reloaded                  already on GitHub, left untouched
+     skipped  someone-else/ascii-art-color              owned by someone-else (use --collaborations to include)
 
 The repositories above will be created with the visibility shown.
 To flip any, enter its number(s) separated by spaces [Enter to keep them as they are]: 2
-  ivogiake/math-skills  private -> public
+  JohnStarlight/math-skills  private -> public
 
 Migrate 2 repositories to github.com/JohnStarlight? [y/N]
 ```
@@ -424,16 +424,16 @@ by whose they are, and the run says so:
 
 ```
 2 repositories are called "quadchecker"; renaming to keep both:
-  akasapid/quadchecker -> quadchecker-akasapid
-  ivogiake/quadchecker -> quadchecker
+  teammate/quadchecker -> quadchecker-teammate
+  JohnStarlight/quadchecker -> quadchecker
 ```
 
-`quadchecker-akasapid` is correct and impersonal, and the person who owns the
+`quadchecker-teammate` is correct and impersonal, and the person who owns the
 repositories usually has a better word for which one it is — so `r` on the
 selection screen replaces it with anything you like:
 
 ```
- > *  akasapid/quadchecker   private   create as quadchecker-team
+ > *  teammate/quadchecker   private   create as quadchecker-team
 ```
 
 ## What gets skipped, and why
@@ -492,10 +492,10 @@ so a history where you committed from two machines does not arrive as two
 strangers:
 
 ```
-john.vogiakelis@gmail.com            -> 259051186+JohnStarlight@users.noreply.github.com
-ivogiake@noreply.platform.zone01.gr  -> 259051186+JohnStarlight@users.noreply.github.com
-basilisalevizos@yahoo.gr             -> ec53e453c0@redacted.invalid
-p.petrakis@hotmail.gr                -> 50e51655ba@redacted.invalid
+you@example.com            -> 259051186+JohnStarlight@users.noreply.github.com
+you@noreply.platform.zone01.gr  -> 259051186+JohnStarlight@users.noreply.github.com
+teammate@example.net             -> 7fe87d38c9@redacted.invalid
+classmate@example.org                -> ff2018ab2f@redacted.invalid
 ```
 
 Every replaced address takes the same shape: ten hexadecimal characters, then
@@ -546,6 +546,12 @@ recognised at all.
 | `github` | GitHub | GitHub | `gitea` (the old one, renamed) |
 | `both` | Gitea | **both servers** | `gitea`, `github` |
 | `gitea` | Gitea | Gitea | `github` |
+
+`both` needs the GitHub repository to be **private**, and is refused otherwise.
+It carries whatever you commit to GitHub on every push, addresses and all —
+contained while the destination is private, and a continuous publication while
+it is not. It is also refused for a repository whose history was redacted,
+where the only coherent outcome is for the clone to take that history on.
 
 `doctor` and `list` take no flags of their own. Every command takes
 `--gitea-url`.

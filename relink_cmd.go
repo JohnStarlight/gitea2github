@@ -379,7 +379,8 @@ func clonesFromProbe(ctx context.Context, probe []relink.Result, mode string) []
 	clones := make([]tui.Clone, 0, len(probe))
 	for _, r := range probe {
 		clone := tui.Clone{
-			Path: r.Path, Display: shortenPath(r.Path), Mode: mode, Redacted: r.Redacted,
+			Path: r.Path, Display: shortenPath(r.Path), Mode: mode,
+			Redacted: r.Redacted, Public: r.Public,
 		}
 		// Anything the scan did not mark as planned cannot be repointed by
 		// this run, so the reason it gave is shown instead of a destination.
