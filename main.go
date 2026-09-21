@@ -24,6 +24,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -261,4 +262,12 @@ func (l *stringList) Set(value string) error {
 	}
 	*l = append(*l, value)
 	return nil
+}
+
+// count renders "1 thing" or "3 things".
+func count(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return strconv.Itoa(n) + " " + many
 }
