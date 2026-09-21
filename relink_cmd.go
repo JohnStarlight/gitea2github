@@ -229,11 +229,19 @@ func cmdRelink(ctx context.Context, args []string) error {
 // Deliberately quiet about its own failures: the migration has already
 // succeeded by this point, and a directory that cannot be scanned is a reason
 // to say so and stop, not to report the whole run as failed.
-func offerRelink(ctx context.Context, prompt *ui.Prompter, giteaURL, ghLogin, ghToken string, assumeYes bool) {
+func offerRelink(ctx context.Context, prompt *ui.Prompter, giteaURL, ghLogin, ghToken string,
+	assumeYes bool, redacted int) {
 	// Never without being asked. Repointing rewrites remotes in directories
 	// the migration never touched, so --yes, which is consent to the migration
 	// that was described, is not consent to this.
 	if !prompt.Interactive() || assumeYes {
+		if redacted > 0 {
+			fmt.Printf("\n%s rewritten, so the clones on this machine can no longer push to "+
+				"GitHub: what is there now is different commits.\n"+
+				"Run `gitea2github relink .` to have them take the rewritten history on.\n",
+				count(redacted, "history was", "histories were"))
+			return
+		}
 		fmt.Println("\nYour local clones still push to Gitea. Run `gitea2github relink .` to repoint them.")
 		return
 	}
@@ -242,7 +250,28 @@ func offerRelink(ctx context.Context, prompt *ui.Prompter, giteaURL, ghLogin, gh
 	if err != nil {
 		return
 	}
-	if !prompt.Confirm(fmt.Sprintf("\nRepoint the clones under %s to GitHub?", shortenPath(cwd)), false) {
+
+	// A migration that copied histories verbatim leaves clones that still
+	// work, so repointing them is tidying and the default is no. One that
+	// rewrote them leaves clones that cannot push to what was just created,
+	// which is not tidying and should not be stumbled past.
+	question := fmt.Sprintf("\nRepoint the clones under %s to GitHub?", shortenPath(cwd))
+	def := false
+	if redacted > 0 {
+		fmt.Printf("\n%s rewritten. The clones on this machine still hold the original,\n"+
+			"so they can no longer push to GitHub: what is there now is different commits.\n",
+			count(redacted, "history was", "histories were"))
+		question = fmt.Sprintf("Have the clones under %s take on the rewritten history?",
+			shortenPath(cwd))
+		def = true
+	}
+	if !prompt.Confirm(question, def) {
+		if redacted > 0 {
+			fmt.Println("Left alone. Those clones cannot push to GitHub until they take the " +
+				"rewritten history on -- `gitea2github relink` when you are ready. " +
+				"Pushing to Gitea still works.")
+			return
+		}
 		fmt.Println("Left alone. Run `gitea2github relink <directory>` whenever you want to.")
 		return
 	}

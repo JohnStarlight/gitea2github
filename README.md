@@ -311,6 +311,20 @@ every address the redaction removed.
 takes on GitHub's rewritten history and stops being a clone of the Gitea
 repository. `both` and `gitea` are greyed out, because neither is possible.
 
+A migration that redacted anything says so before offering, and offers with
+the answer already yes:
+
+```
+2 histories were rewritten. The clones on this machine still hold the original,
+so they can no longer push to GitHub: what is there now is different commits.
+Have the clones under ~/Git take on the rewritten history? [Y/n]
+```
+
+Declining is fine and says what it costs — those clones cannot push to GitHub
+until they take the rewritten history on, though pushing to Gitea still works.
+A migration that rewrote nothing asks the tidier question it always did, with
+the answer still no.
+
 ```
  > *  ~/Git/ascii-art   adopt   takes on GitHub's rewritten history; Gitea remote removed
    -  ~/Git/go-reloaded         2 commits never pushed to Gitea; push them first

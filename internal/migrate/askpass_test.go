@@ -14,13 +14,13 @@ import (
 // calls apart is the wording of the prompt. Answering them the wrong way round
 // sends the token as the username, which fails as a baffling 401.
 func TestAskpassAnswersTheRightPrompt(t *testing.T) {
-	t.Setenv(askpassUserEnv, "ivogiake")
+	t.Setenv(askpassUserEnv, "JohnStarlight")
 	t.Setenv(askpassTokenEnv, "ghp_secret")
 
 	cases := map[string]string{
-		"Username for 'https://gitea.example.com': ":          "ivogiake",
-		"username for 'https://gitea.example.com': ":          "ivogiake",
-		"Password for 'https://ivogiake@gitea.example.com': ": "ghp_secret",
+		"Username for 'https://gitea.example.com': ":          "JohnStarlight",
+		"username for 'https://gitea.example.com': ":          "JohnStarlight",
+		"Password for 'https://JohnStarlight@gitea.example.com': ": "ghp_secret",
 		"Password for 'https://x-access-token@github.com': ":  "ghp_secret",
 	}
 	for prompt, want := range cases {
@@ -46,7 +46,7 @@ func TestAskpassAnswersWithANewline(t *testing.T) {
 // TestAskpassWithoutAPromptIsSafe covers git calling the helper with no
 // argument, which must not panic and must not answer with the username.
 func TestAskpassWithoutAPromptIsSafe(t *testing.T) {
-	t.Setenv(askpassUserEnv, "ivogiake")
+	t.Setenv(askpassUserEnv, "JohnStarlight")
 	t.Setenv(askpassTokenEnv, "ghp_secret")
 	var out strings.Builder
 	Askpass(nil, &out)
@@ -59,13 +59,13 @@ func TestAskpassWithoutAPromptIsSafe(t *testing.T) {
 // exists for: the credential travels in the environment, and nothing hands git
 // a URL with a secret in it.
 func TestAskpassEnvCarriesTheCredentialAndNoURL(t *testing.T) {
-	env := askpassEnv("/usr/local/bin/gitea2github", "ivogiake", "ghp_secret")
+	env := askpassEnv("/usr/local/bin/gitea2github", "JohnStarlight", "ghp_secret")
 
 	joined := strings.Join(env, "\n")
 	for _, want := range []string{
 		"GIT_ASKPASS=/usr/local/bin/gitea2github",
 		AskpassEnv + "=1",
-		askpassUserEnv + "=ivogiake",
+		askpassUserEnv + "=JohnStarlight",
 		askpassTokenEnv + "=ghp_secret",
 		// Still required: the helper answering does not stop git falling
 		// through to a terminal prompt when the answer is rejected.
@@ -89,8 +89,8 @@ func TestAskpassEnvCarriesTheCredentialAndNoURL(t *testing.T) {
 func TestRunGitRefusesACredentialInTheArguments(t *testing.T) {
 	const secret = "ghp_secret"
 
-	_, err := runGitAs(context.Background(), "", "ivogiake", secret,
-		"clone", "--mirror", "https://ivogiake:"+secret+"@gitea.example.com/me/r.git", "dest")
+	_, err := runGitAs(context.Background(), "", "JohnStarlight", secret,
+		"clone", "--mirror", "https://JohnStarlight:"+secret+"@gitea.example.com/me/r.git", "dest")
 	if err == nil {
 		t.Fatal("runGitAs ran a command with the credential in its arguments")
 	}
@@ -104,7 +104,7 @@ func TestRunGitRefusesACredentialInTheArguments(t *testing.T) {
 func TestRunGitAllowsACleanURL(t *testing.T) {
 	// --version touches nothing and needs no network, so this checks that the
 	// guard lets a normal invocation through rather than what git then does.
-	out, err := runGitAs(context.Background(), "", "ivogiake", "ghp_secret", "--version")
+	out, err := runGitAs(context.Background(), "", "JohnStarlight", "ghp_secret", "--version")
 	if err != nil {
 		t.Fatalf("runGitAs refused an ordinary command: %v (%s)", err, out)
 	}
@@ -173,7 +173,7 @@ func TestRedactOnlyNarrowsRedactionToTheChosenRepositories(t *testing.T) {
 			"without a Mapper there is nothing to redact with"},
 	}
 	for _, c := range cases {
-		if got := c.opts.redacts(c.repo); got != c.want {
+		if got := c.opts.Redacts(c.repo); got != c.want {
 			t.Errorf("%s: redacts(%q) = %v, want %v (%s)", c.name, c.repo, got, c.want, c.about)
 		}
 	}

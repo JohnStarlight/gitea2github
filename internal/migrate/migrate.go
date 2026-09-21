@@ -39,7 +39,7 @@ const (
 // Result records the outcome for one repository so the CLI can print a summary
 // instead of making the user scroll back through interleaved worker output.
 type Result struct {
-	Source string // Gitea full name, e.g. "ivogiake/linear-stats"
+	Source string // Gitea full name, e.g. "JohnStarlight/linear-stats"
 	Target string // GitHub full name, e.g. "JohnStarlight/linear-stats"
 
 	// SourcePrivate and Private are the visibility on Gitea and the visibility
@@ -242,7 +242,7 @@ func migrateOne(ctx context.Context, repo gitea.Repo, gh *github.Client, opts Op
 	}
 
 	if opts.DryRun {
-		if opts.redacts(repo.FullName) {
+		if opts.Redacts(repo.FullName) {
 			return finish(StatusPlanned, "would clone, redact emails, create and push")
 		}
 		return finish(StatusPlanned, "would clone, create and push")
@@ -274,7 +274,7 @@ func migrateOne(ctx context.Context, repo gitea.Repo, gh *github.Client, opts Op
 	// locally, and the point is that the un-redacted version never reaches
 	// GitHub at all.
 	pushFrom := mirrorPath
-	if opts.redacts(repo.FullName) {
+	if opts.Redacts(repo.FullName) {
 		opts.Log("redacting email addresses in %s", repo.FullName)
 		rewritten := mirrorPath + ".redacted"
 		if err := rewriteHistory(ctx, mirrorPath, rewritten, opts.Mapper); err != nil {
@@ -303,12 +303,12 @@ func migrateOne(ctx context.Context, repo gitea.Repo, gh *github.Client, opts Op
 	return finish(StatusMigrated, "")
 }
 
-// redacts reports whether this repository's history is to be rewritten.
+// Redacts reports whether this repository's history is to be rewritten.
 //
 // The two conditions are asked in this order because they answer different
 // questions: the Mapper is whether redaction is configured at all, and
 // RedactOnly is which repositories it reaches.
-func (o Options) redacts(fullName string) bool {
+func (o Options) Redacts(fullName string) bool {
 	if o.Mapper == nil {
 		return false
 	}
