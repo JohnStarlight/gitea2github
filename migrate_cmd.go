@@ -323,7 +323,8 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	// be remembered is the difference between a finished migration and one the
 	// user discovers is unfinished at their next push.
 	if countStatus(results, migrate.StatusMigrated) > 0 {
-		offerRelink(ctx, prompt, *giteaURL, ghLogin, ghCred.Token, *assumeYes)
+		offerRelink(ctx, prompt, *giteaURL, ghLogin, ghCred.Token, *assumeYes,
+			redactedCount(results, options))
 	}
 	return nil
 }
@@ -502,6 +503,23 @@ func planFromProbe(probe []migrate.Result, selected []string, overrides map[stri
 // The screen seeds its one address from the list, so handing the same address
 // straight back must not lengthen it: a duplicate would make redact.Mapper
 // report a count that does not match what the user typed.
+
+// redactedCount is how many of the repositories that moved had their history
+// rewritten.
+//
+// It decides how hard the offer that follows presses. A migration that copied
+// histories verbatim leaves clones that still work; one that rewrote them
+// leaves clones that cannot push to what was just created, and saying so is
+// worth more than a tidy default.
+func redactedCount(results []migrate.Result, opts migrate.Options) int {
+	n := 0
+	for _, r := range results {
+		if r.Status == migrate.StatusMigrated && opts.Redacts(r.Source) {
+			n++
+		}
+	}
+	return n
+}
 
 // printResults renders the per-repository outcome table and the tally beneath
 // it. It deliberately returns nothing: the same renderer prints the plan and

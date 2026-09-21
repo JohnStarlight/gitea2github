@@ -6,6 +6,7 @@ import (
 
 	"github.com/JohnStarlight/gitea2github/internal/gitea"
 	"github.com/JohnStarlight/gitea2github/internal/migrate"
+	"github.com/JohnStarlight/gitea2github/internal/redact"
 	"github.com/JohnStarlight/gitea2github/internal/ui"
 )
 
@@ -252,5 +253,51 @@ func TestAskExclusionsNeverBlocksWithoutATerminal(t *testing.T) {
 	}
 	if out.String() != "" {
 		t.Errorf("printed a question with nobody to answer it: %q", out.String())
+	}
+}
+
+// TestRedactedCountOnlyCountsWhatMoved decides how hard the offer after a
+// migration presses. A run that copied histories verbatim leaves clones that
+// still work; one that rewrote them leaves clones that cannot push to what was
+// just created.
+func TestRedactedCountOnlyCountsWhatMoved(t *testing.T) {
+	results := []migrate.Result{
+		{Source: "me/moved-and-redacted", Status: migrate.StatusMigrated},
+		{Source: "me/moved-plain", Status: migrate.StatusMigrated},
+		{Source: "me/already-there", Status: migrate.StatusExists},
+		{Source: "me/skipped", Status: migrate.StatusSkipped},
+	}
+	opts := migrate.Options{
+		Mapper:     redact.NewMapper(nil, ""),
+		RedactOnly: map[string]bool{"me/moved-and-redacted": true, "me/already-there": true},
+	}
+
+	// Only the one that both moved and was rewritten counts: a repository left
+	// untouched on GitHub has a clone that still matches it.
+	if got := redactedCount(results, opts); got != 1 {
+		t.Errorf("redactedCount = %d, want 1", got)
+	}
+
+	// With no Mapper nothing was rewritten, whatever RedactOnly says.
+	if got := redactedCount(results, migrate.Options{RedactOnly: opts.RedactOnly}); got != 0 {
+		t.Errorf("redactedCount without a Mapper = %d, want 0", got)
+	}
+
+	// A nil RedactOnly with a Mapper means every repository, which is what
+	// --redact-emails on the command line asks for.
+	all := migrate.Options{Mapper: redact.NewMapper(nil, "")}
+	if got := redactedCount(results, all); got != 2 {
+		t.Errorf("redactedCount with everything redacted = %d, want 2", got)
+	}
+}
+
+// TestCountReadsAsASentence covers the phrasing the offer is built from, which
+// has to work for one and for many.
+func TestCountReadsAsASentence(t *testing.T) {
+	cases := map[int]string{1: "1 history was", 2: "2 histories were", 30: "30 histories were"}
+	for n, want := range cases {
+		if got := count(n, "history was", "histories were"); got != want {
+			t.Errorf("count(%d) = %q, want %q", n, got, want)
+		}
 	}
 }

@@ -173,7 +173,7 @@ func TestRedactOnlyNarrowsRedactionToTheChosenRepositories(t *testing.T) {
 			"without a Mapper there is nothing to redact with"},
 	}
 	for _, c := range cases {
-		if got := c.opts.redacts(c.repo); got != c.want {
+		if got := c.opts.Redacts(c.repo); got != c.want {
 			t.Errorf("%s: redacts(%q) = %v, want %v (%s)", c.name, c.repo, got, c.want, c.about)
 		}
 	}
