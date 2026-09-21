@@ -56,7 +56,7 @@ func Targets(repos []gitea.Repo, giteaUser string) map[string]string {
 // with the Gitea full names that want them, sorted.
 //
 // Reported rather than only resolved, so the screen can say that a name was
-// changed and let it be changed again by hand: "quadchecker-akasapid" is
+// changed and let it be changed again by hand: "quadchecker-teammate" is
 // correct and impersonal, and the person who owns the repositories usually has
 // a better word for which one it is.
 func Collisions(repos []gitea.Repo) map[string][]string {

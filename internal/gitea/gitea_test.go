@@ -25,15 +25,15 @@ func TestNewBaseURL(t *testing.T) {
 // re-publishing it under their GitHub account is appropriate.
 func TestOwnedBy(t *testing.T) {
 	r := Repo{}
-	r.Owner.Login = "ivogiake"
+	r.Owner.Login = "JohnStarlight"
 
-	if !r.OwnedBy("ivogiake") {
+	if !r.OwnedBy("JohnStarlight") {
 		t.Error("exact match should be owned")
 	}
-	if !r.OwnedBy("IVOGIAKE") {
+	if !r.OwnedBy("JOHNSTARLIGHT") {
 		t.Error("Gitea logins are case-insensitive, so the check must be too")
 	}
-	if r.OwnedBy("ppetraki") {
+	if r.OwnedBy("someone-else") {
 		t.Error("a different login must not be reported as owner")
 	}
 }
