@@ -547,6 +547,12 @@ recognised at all.
 | `both` | Gitea | **both servers** | `gitea`, `github` |
 | `gitea` | Gitea | Gitea | `github` |
 
+`both` needs the GitHub repository to be **private**, and is refused otherwise.
+It carries whatever you commit to GitHub on every push, addresses and all —
+contained while the destination is private, and a continuous publication while
+it is not. It is also refused for a repository whose history was redacted,
+where the only coherent outcome is for the clone to take that history on.
+
 `doctor` and `list` take no flags of their own. Every command takes
 `--gitea-url`.
 

@@ -678,3 +678,63 @@ func TestAdoptionIsCountedApartFromTheDestinations(t *testing.T) {
 		t.Errorf("the footer total is wrong: %q", footer)
 	}
 }
+
+// TestDualPushNeedsAPrivateDestination is the rule that keeps this mode from
+// leaking. Pushing to both servers carries whatever is committed here to
+// GitHub as it is made, addresses and all -- contained while the destination
+// is private, a continuous publication while it is not.
+func TestDualPushNeedsAPrivateDestination(t *testing.T) {
+	clones := []Clone{
+		{Path: "/private", Display: "~/Git/private", Public: false},
+		{Path: "/public", Display: "~/Git/public", Public: true},
+	}
+	m := NewRelinkModel(clones, relink.ModeGitHub, "gitea")
+	m.SetSize(96, 20)
+
+	// Private: the mode is available.
+	m.cursor = 0
+	m.Update(Key{Kind: KeyRune, Rune: '2'})
+	if _, modes := m.Chosen(); modes["/private"] != relink.ModeBoth {
+		t.Errorf("a private destination refused dual push: %v", modes)
+	}
+
+	// Public: it is not, and the refusal says why.
+	m.cursor = 1
+	m.Update(Key{Kind: KeyRune, Rune: '2'})
+	if _, modes := m.Chosen(); modes["/public"] == relink.ModeBoth {
+		t.Error("a public destination accepted dual push")
+	}
+	if !strings.Contains(m.note, "public") {
+		t.Errorf("the refusal does not say what is wrong: %q", m.note)
+	}
+
+	// The other two destinations stay open to it.
+	for _, mode := range []string{relink.ModeGitHub, relink.ModeGitea} {
+		if ok, why := (Clone{Public: true}).allows(mode); !ok {
+			t.Errorf("a public destination refused %s: %s", mode, why)
+		}
+	}
+}
+
+// TestBulkSettingSkipsWhatItMayNotChange keeps A from doing what 2 refuses,
+// and says how many it held back.
+func TestBulkSettingSkipsWhatItMayNotChange(t *testing.T) {
+	clones := []Clone{
+		{Path: "/private", Display: "~/Git/private", Public: false},
+		{Path: "/public", Display: "~/Git/public", Public: true},
+	}
+	m := NewRelinkModel(clones, relink.ModeGitHub, "gitea")
+	m.SetSize(96, 20)
+
+	m.cursor = 0
+	m.Update(Key{Kind: KeyRune, Rune: '2'}) // the private one to both
+	m.Update(Key{Kind: KeyRune, Rune: 'A'}) // and everything to match
+
+	_, modes := m.Chosen()
+	if modes["/public"] == relink.ModeBoth {
+		t.Error("A pushed a public destination into dual push")
+	}
+	if !strings.Contains(m.note, "left as") {
+		t.Errorf("A did not say what it held back: %q", m.note)
+	}
+}
