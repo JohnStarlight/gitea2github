@@ -180,3 +180,46 @@ func TestSkipsNonGiteaRemotes(t *testing.T) {
 		t.Errorf("origin was modified to %q", got)
 	}
 }
+
+// TestTargetsPickTheRenamedRepository covers a repository that took another
+// name on GitHub -- because another owner's had the same one, or because it
+// was renamed on the selection screen. The clone is matched by its whole
+// Gitea name, so it is pointed at where its repository went, not at whatever
+// has its last path segment.
+func TestTargetsPickTheRenamedRepository(t *testing.T) {
+	root := newClone(t)
+	opts := options(root, ModeGitHub)
+	opts.DryRun = true
+	opts.Targets = map[string]string{"someone/demo": "demo-someone"}
+
+	results, err := Run(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := results[0].NewURL, "https://github.com/octocat/demo-someone.git"; got != want {
+		t.Errorf("NewURL = %q, want %q", got, want)
+	}
+
+	// Without an entry, the clone's own name is all there is to go on.
+	opts.Targets = nil
+	results, _ = Run(context.Background(), opts)
+	if got, want := results[0].NewURL, "https://github.com/octocat/demo.git"; got != want {
+		t.Errorf("without targets, NewURL = %q, want %q", got, want)
+	}
+}
+
+func TestGiteaFullName(t *testing.T) {
+	cases := map[string]string{
+		"https://platform.zone01.gr/git/teammate/quadchecker.git": "teammate/quadchecker",
+		"https://platform.zone01.gr/git/teammate/quadchecker":     "teammate/quadchecker",
+		"https://gitea.example.com/me/demo/":                      "me/demo",
+		"git@gitea.example.com:me/demo.git":                       "me/demo",
+		"ssh://git@gitea.example.com:2222/me/demo.git":            "me/demo",
+		"https://user@gitea.example.com/sub/me/demo.git":          "me/demo",
+	}
+	for in, want := range cases {
+		if got := GiteaFullName(in); got != want {
+			t.Errorf("GiteaFullName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

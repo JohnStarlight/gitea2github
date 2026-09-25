@@ -431,6 +431,15 @@ selection screen replaces it with anything you like:
  > *  teammate/quadchecker   private   create as quadchecker-team
 ```
 
+`relink` follows both. It matches a clone by the whole of its Gitea name,
+`teammate/quadchecker`, not only by the last part, so the group's clone is
+pointed at `quadchecker-teammate` and yours at `quadchecker`. The repointing
+offered at the end of a migration knows every name, including the ones you
+typed; `relink` run later works out the automatic ones again from Gitea, but
+cannot know a name you typed. Whatever name it arrives at, a GitHub repository
+whose commits and files both differ from the clone's is left alone rather than
+repointed at.
+
 ## Without the interface
 
 Everything above assumes you want to look at a screen. If you would rather type
