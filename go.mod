@@ -1,6 +1,8 @@
 module github.com/JohnStarlight/gitea2github
 
-go 1.21
+go 1.27.0
+
+toolchain go1.27.1
 
 require golang.org/x/term v0.28.0
 

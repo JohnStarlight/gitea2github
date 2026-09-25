@@ -50,8 +50,11 @@ go install github.com/JohnStarlight/gitea2github@latest
 Or from a checkout: `go build -o gitea2github .`
 
 Runs on macOS, Linux, Windows and BSD — anywhere Go and git run. Needs **Go
-1.21+** to build (**1.23+ on a recent macOS**, which will not start programs
-linked by older Go) and **git** on `PATH` to run; the `gh` CLI is optional.
+1.21 or newer** installed to build, and **git** on `PATH` to run; the `gh` CLI
+is optional. It is built with Go 1.27, which Go fetches by itself if yours is
+older — so it runs where Go 1.27 does: **macOS 13 Ventura** or newer (Macs
+from 2017–2018 on, and every Apple silicon Mac), Windows 10 or newer, and
+Linux with kernel 3.2 or newer.
 
 Everything is the Go standard library except `golang.org/x/term`, which is used
 only to put the terminal into raw mode for the selection screen and to tell a
