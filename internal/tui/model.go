@@ -42,6 +42,11 @@ type Row struct {
 	// question than a line explaining it was already there.
 	Blocked string
 
+	// Resume marks a repository already on GitHub with nothing in it, left by
+	// an interrupted run. It is pushed into rather than created, and its
+	// visibility is not simply Gitea's; see Model.VisibilityOverrides.
+	Resume bool
+
 	// Include is the user's own choice for this row. It only has meaning while
 	// the row is eligible; see Model.Selected.
 	Include bool
@@ -252,7 +257,12 @@ func (m *Model) VisibilityOverrides() map[string]bool {
 		if !r.eligible(m.groups, m.forks, m.archived) || !r.Include {
 			continue
 		}
-		if r.Private != r.SourcePrivate {
+		// A resumed repository is always recorded. Its visibility on screen
+		// may differ from Gitea's without anyone having chosen it -- the
+		// empty copy on GitHub had its own -- so "same as Gitea" is not the
+		// default the migrator would otherwise fall back to, and leaving it
+		// out would quietly undo a choice made here.
+		if r.Private != r.SourcePrivate || r.Resume {
 			out[r.Name] = r.Private
 		}
 	}

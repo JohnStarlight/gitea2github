@@ -366,3 +366,23 @@ func TestTheRowSaysWhereItWillLand(t *testing.T) {
 		t.Errorf("a row keeping its name claims to be renamed: %q", got)
 	}
 }
+
+// TestResumedRowKeepsWhatTheScreenShows covers an empty repository left on
+// GitHub by an interrupted run. Its visibility defaults to private when Gitea
+// and the empty copy disagree, so "same as Gitea" is a choice made here, not
+// the default -- and dropping it, as an ordinary row would, lets the migrator
+// fall back to private behind the user's back.
+func TestResumedRowKeepsWhatTheScreenShows(t *testing.T) {
+	rows := []Row{{Name: "me/demo", SourcePrivate: false, Private: true, Resume: true, Include: true}}
+	m := NewModel(rows, false, false, false, false, "")
+
+	if got, want := m.VisibilityOverrides(), map[string]bool{"me/demo": true}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("before any flip, overrides = %v, want %v", got, want)
+	}
+
+	// Flipped to public -- which is how it is on Gitea.
+	m.press(keys("v")...)
+	if got, want := m.VisibilityOverrides(), map[string]bool{"me/demo": false}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("after flipping to public, overrides = %v, want %v", got, want)
+	}
+}

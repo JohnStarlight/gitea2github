@@ -336,6 +336,15 @@ func (m *Model) columns() (nameW, visW int) {
 	return nameW, visW
 }
 
+// createVerb names what happens to a row that will be migrated: created, or
+// -- for an empty repository an interrupted run left on GitHub -- filled.
+func createVerb(r Row) string {
+	if r.Resume {
+		return "resume"
+	}
+	return "create"
+}
+
 // detailFor is the right-hand text: what will happen, or why nothing will.
 func (m *Model) detailFor(r Row, st state) string {
 	switch st {
@@ -357,12 +366,12 @@ func (m *Model) detailFor(r Row, st state) string {
 		if r.Redact {
 			changes = append(changes, "emails redacted")
 		}
-		return "create, " + strings.Join(changes, ", ")
+		return createVerb(r) + ", " + strings.Join(changes, ", ")
 	default:
 		if r.Renamed {
-			return "create as " + r.Target
+			return createVerb(r) + " as " + r.Target
 		}
-		return "create"
+		return createVerb(r)
 	}
 }
 

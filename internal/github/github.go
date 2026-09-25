@@ -129,19 +129,12 @@ func (c *Client) Identity(ctx context.Context) (Identity, error) {
 	}, nil
 }
 
-// Exists reports whether owner/name is already present on GitHub.
-//
-// This is what makes the migrator safe to re-run: a migration that dies halfway
-// through thirty repositories can be restarted, and the repositories that
-// already made it across are recognised rather than colliding.
-func (c *Client) Exists(ctx context.Context, owner, name string) (bool, error) {
-	_, found, err := c.Lookup(ctx, owner, name)
-	return found, err
-}
-
 // Lookup returns the repository if it is there.
 //
-// The same call Exists makes, with the answer kept rather than thrown away.
+// This is what makes the migrator safe to re-run: a migration that dies
+// halfway through thirty repositories can be restarted, and the repositories
+// that already made it across are recognised rather than colliding.
+//
 // Whether a repository is private decides what may safely be done with it: a
 // clone that pushes to both servers sends un-redacted commits to GitHub on
 // every push, which is contained while the destination is private and is a
@@ -205,6 +198,33 @@ func (c *Client) HasCommit(ctx context.Context, owner, name, sha string) (bool, 
 		return false, ErrEmptyRepository
 	}
 	return false, err
+}
+
+// IsEmpty reports whether a repository that exists has nothing in it.
+//
+// A migration that created a repository and was interrupted before its push
+// landed leaves exactly this behind. Telling it apart from a repository that
+// is really there is what lets the next run finish the job instead of
+// reporting it as done. The size GitHub reports is no help: it is updated
+// after the fact, and reads 0 for a while after a push has landed.
+func (c *Client) IsEmpty(ctx context.Context, owner, name string) (bool, error) {
+	path := fmt.Sprintf("/repos/%s/%s/commits?per_page=1", url.PathEscape(owner), url.PathEscape(name))
+	err := c.do(ctx, http.MethodGet, path, nil, nil)
+	var status *StatusError
+	switch {
+	case err == nil:
+		return false, nil
+	case errors.As(err, &status) && status.Code == http.StatusConflict:
+		// "Git Repository is empty."
+		return true, nil
+	}
+	return false, err
+}
+
+// SetPrivate changes the visibility of an existing repository.
+func (c *Client) SetPrivate(ctx context.Context, owner, name string, private bool) error {
+	path := fmt.Sprintf("/repos/%s/%s", url.PathEscape(owner), url.PathEscape(name))
+	return c.do(ctx, http.MethodPatch, path, map[string]any{"private": private}, nil)
 }
 
 // TipAuthors returns the author and committer addresses of the most recent

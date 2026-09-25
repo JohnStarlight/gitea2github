@@ -31,7 +31,8 @@ first. Beyond that:
 - **Nothing is republished by accident.** Other people's repositories, forks and
   archived ones are [left alone](#what-gets-skipped-and-why) unless you ask.
 - **An interrupted run is just re-run.** Anything already on GitHub is reported
-  as `exists` and left untouched.
+  as `exists` and left untouched; a repository the interruption left empty is
+  finished instead.
 - **Visibility is never widened by accident.** Repositories are created exactly
   as they are on Gitea unless you say otherwise, one by one. Descriptions come
   along too, instead of being retyped.
@@ -519,7 +520,11 @@ of their own. Every command takes `--gitea-url`.
 - **No prompt is mandatory.** Without a terminal, questions return defaults and
   a run that would change something stops rather than proceeding unasked.
 - **Idempotent.** A repository already on GitHub is reported as `exists`, so an
-  interrupted run is simply re-run.
+  interrupted run is simply re-run. One that was created but never received
+  its push is empty, and the next run pushes into it rather than calling it
+  done — made private first if Gitea and GitHub disagree about it, unless you
+  chose otherwise. The push is atomic, so a repository is either empty or
+  complete, never half-filled.
 - **Visibility is mirrored, not guessed.** A repository is created exactly as
   private or public as it is on Gitea unless you change it deliberately, on the
   row in front of you.
