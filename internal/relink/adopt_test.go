@@ -45,8 +45,20 @@ func scenario(t *testing.T) (work, gitea, github string) {
 	run(work, "remote", "add", "origin", gitea)
 	run(work, "push", "-q", "-u", "origin", "main")
 
-	// The redacted copy, built the way the migrator builds it.
-	run(root, "init", "-q", "--bare", github)
+	redactedCopy(t, gitea, github)
+	return work, gitea, github
+}
+
+// redactedCopy (re)builds the GitHub stand-in from Gitea, rewritten the way
+// the migrator rewrites it.
+func redactedCopy(t *testing.T, gitea, github string) {
+	t.Helper()
+	if err := os.RemoveAll(github); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "init", "-q", "--bare", github).CombinedOutput(); err != nil {
+		t.Fatalf("init: %v: %s", err, out)
+	}
 	export := exec.Command("git", "-C", gitea, "fast-export", "--all",
 		"--signed-tags=strip", "--tag-of-filtered-object=rewrite", "--use-done-feature")
 	imp := exec.Command("git", "-C", github, "fast-import", "--quiet", "--done")
@@ -59,6 +71,19 @@ func scenario(t *testing.T) (work, gitea, github string) {
 	if out, err := imp.CombinedOutput(); err != nil {
 		t.Fatalf("fast-import: %v: %s", err, out)
 	}
+}
+
+// scenarioWithBranchAndTag adds a second branch and a tag, both on Gitea,
+// before the redacted copy is made.
+func scenarioWithBranchAndTag(t *testing.T) (work, gitea, github string) {
+	t.Helper()
+	work, gitea, github = scenario(t)
+	gitIn(t, work, "tag", "v1")
+	gitIn(t, work, "checkout", "-q", "-b", "feature")
+	commitIn(t, work, "f.txt", "feature\n")
+	gitIn(t, work, "checkout", "-q", "main")
+	gitIn(t, work, "push", "-q", "-u", "origin", "feature", "v1")
+	redactedCopy(t, gitea, github)
 	return work, gitea, github
 }
 
@@ -149,129 +174,169 @@ func TestAdoptEndsTheGiteaRelationship(t *testing.T) {
 	}
 }
 
+// github is the side a check compares with, read from the GitHub stand-in.
+func githubSide(path string) GitHubSide { return repoSide{path: path, prefix: "refs/"} }
+
+// gitIn runs git in dir for a test, failing it on error.
+func gitIn(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	out, err := gitOutput(context.Background(), dir, args...)
+	if err != nil {
+		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+	}
+	return out
+}
+
+// commitIn writes a file and commits it.
+func commitIn(t *testing.T, dir, file, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, file), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, dir, "add", ".")
+	gitIn(t, dir, "commit", "-qm", body)
+}
+
 // TestCheckAdoptableRefusesUncommittedWork stops a hard reset quietly
 // reverting files somebody is in the middle of editing.
 func TestCheckAdoptableRefusesUncommittedWork(t *testing.T) {
-	work, _, _ := scenario(t)
+	work, _, github := scenario(t)
 
-	if risk := CheckAdoptable(context.Background(), work); risk.Reason != "" {
+	if risk := CheckAdoptable(context.Background(), work, githubSide(github)); risk.Reason != "" {
 		t.Fatalf("a clean clone was refused: %s", risk.Reason)
 	}
 
 	if err := os.WriteFile(filepath.Join(work, "a.txt"), []byte("edited\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	risk := CheckAdoptable(context.Background(), work)
-	if risk.Reason == "" {
-		t.Fatal("a clone with uncommitted changes was allowed to adopt")
-	}
-	if !strings.Contains(risk.Reason, "uncommitted") {
-		t.Errorf("the refusal does not say what is wrong: %q", risk.Reason)
+	risk := CheckAdoptable(context.Background(), work, githubSide(github))
+	if !strings.Contains(risk.Reason, "not committed") {
+		t.Errorf("uncommitted changes were not reported: %q", risk.Reason)
 	}
 }
 
-// TestCheckAdoptableRefusesUnpushedCommits covers the loss that cannot be
-// undone: once the clone belongs to GitHub it can never push to Gitea, so a
-// commit that has not reached Gitea would have nowhere left to go.
-func TestCheckAdoptableRefusesUnpushedCommits(t *testing.T) {
-	work, _, _ := scenario(t)
-	ctx := context.Background()
+// TestCommitNotOnGitHubIsRefused covers work done here after the migration:
+// adopting would move the branch onto GitHub's twin and leave the commit
+// behind.
+func TestCommitNotOnGitHubIsRefused(t *testing.T) {
+	work, _, github := scenario(t)
+	commitIn(t, work, "b.txt", "two\n")
 
-	if err := os.WriteFile(filepath.Join(work, "b.txt"), []byte("two\n"), 0o644); err != nil {
-		t.Fatal(err)
+	risk := CheckAdoptable(context.Background(), work, githubSide(github))
+	if risk.Reason != "main has 1 commit that GitHub does not have" {
+		t.Errorf("Reason = %q", risk.Reason)
 	}
-	if _, err := gitOutput(ctx, work, "add", "."); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := gitOutput(ctx, work, "commit", "-qm", "not pushed"); err != nil {
-		t.Fatal(err)
-	}
+}
 
-	risk := CheckAdoptable(ctx, work)
-	if risk.Reason == "" {
-		t.Fatal("a clone with unpushed commits was allowed to adopt")
+// TestBranchOnlyHereIsRefused is the branch that was never pushed anywhere.
+// Left as it is, one push would publish the original history under it.
+func TestBranchOnlyHereIsRefused(t *testing.T) {
+	work, _, github := scenario(t)
+	gitIn(t, work, "checkout", "-q", "-b", "experiment")
+	commitIn(t, work, "c.txt", "three\n")
+	gitIn(t, work, "checkout", "-q", "main")
+
+	risk := CheckAdoptable(context.Background(), work, githubSide(github))
+	if risk.Reason != "experiment is not on GitHub (1 commit only on this computer)" {
+		t.Errorf("Reason = %q", risk.Reason)
 	}
-	if !strings.Contains(risk.Reason, "never pushed") {
-		t.Errorf("the refusal does not say what is wrong: %q", risk.Reason)
+}
+
+// TestTagOnlyHereIsRefused: a tag is as publishable as a branch.
+func TestTagOnlyHereIsRefused(t *testing.T) {
+	work, _, github := scenario(t)
+	gitIn(t, work, "tag", "v9")
+
+	risk := CheckAdoptable(context.Background(), work, githubSide(github))
+	if risk.Reason != "tag v9 is not on GitHub" {
+		t.Errorf("Reason = %q", risk.Reason)
 	}
 }
 
 // TestUntrackedFilesAreNotAReasonToRefuse keeps the check from being so strict
 // that nobody can ever use it: a hard reset leaves untracked files alone.
 func TestUntrackedFilesAreNotAReasonToRefuse(t *testing.T) {
-	work, _, _ := scenario(t)
+	work, _, github := scenario(t)
 
 	if err := os.WriteFile(filepath.Join(work, "notes.md"), []byte("mine\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if risk := CheckAdoptable(context.Background(), work); risk.Reason != "" {
+	if risk := CheckAdoptable(context.Background(), work, githubSide(github)); risk.Reason != "" {
 		t.Errorf("an untracked file was treated as a danger: %s", risk.Reason)
 	}
 }
 
-// TestBranchWithNoUpstreamIsRefused is the case that slipped through: a branch
-// created locally often has no upstream set, and asking git how far ahead it
-// is then fails. Reading that failure as "nothing to worry about" would let an
-// operation with no way back proceed over commits nobody could get back.
-func TestBranchWithNoUpstreamIsRefused(t *testing.T) {
-	work, _, _ := scenario(t)
-	ctx := context.Background()
+// TestDetachedHeadIsRefused: there is no branch to move.
+func TestDetachedHeadIsRefused(t *testing.T) {
+	work, _, github := scenario(t)
+	gitIn(t, work, "checkout", "-q", "--detach")
 
-	// A branch of its own, with neither an upstream nor a counterpart on the
-	// remote.
-	if _, err := gitOutput(ctx, work, "checkout", "-q", "-b", "experiment"); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(work, "c.txt"), []byte("three\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := gitOutput(ctx, work, "add", "."); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := gitOutput(ctx, work, "commit", "-qm", "on a branch of its own"); err != nil {
-		t.Fatal(err)
-	}
-
-	risk := CheckAdoptable(ctx, work)
-	if risk.Reason == "" {
-		t.Fatal("a branch whose state cannot be compared was allowed to adopt")
-	}
-	if !strings.Contains(risk.Reason, "cannot tell") {
-		t.Errorf("the refusal does not say that the answer is unknown: %q", risk.Reason)
-	}
-	if !strings.Contains(risk.Reason, "experiment") {
-		t.Errorf("the refusal does not name the branch: %q", risk.Reason)
+	if risk := CheckAdoptable(context.Background(), work, githubSide(github)); !strings.Contains(risk.Reason, "not on a branch") {
+		t.Errorf("Reason = %q", risk.Reason)
 	}
 }
 
-// TestRemoteTrackingBranchIsEnoughWithoutAnUpstream keeps the refusal from
-// being so broad that ordinary clones trip it. A branch with no upstream set
-// but a counterpart on the remote can still be compared.
-func TestRemoteTrackingBranchIsEnoughWithoutAnUpstream(t *testing.T) {
-	work, _, _ := scenario(t)
+// TestAdoptMovesEveryBranchAndTag is the whole of it: every branch and tag
+// lands on its twin, origin/* are GitHub's, and git status says there is
+// nothing to do -- not "diverged", which is what invites a push --force.
+func TestAdoptMovesEveryBranchAndTag(t *testing.T) {
+	work, gitea, github := scenarioWithBranchAndTag(t)
 	ctx := context.Background()
 
-	// Drop the upstream, leaving origin/main in place.
-	if _, err := gitOutput(ctx, work, "branch", "--unset-upstream", "main"); err != nil {
-		t.Fatal(err)
+	if err := Adopt(ctx, work, github, nil, nil); err != nil {
+		t.Fatalf("Adopt: %v", err)
 	}
-	if risk := CheckAdoptable(ctx, work); risk.Reason != "" {
-		t.Errorf("a branch with origin/main to compare against was refused: %s", risk.Reason)
+	for _, ref := range []string{"main", "feature", "v1"} {
+		if got, want := head(t, work, ref), head(t, github, ref); got != want {
+			t.Errorf("%s is %s, want GitHub's %s", ref, got, want)
+		}
 	}
+	for _, ref := range []string{"origin/main", "origin/feature"} {
+		if got, want := head(t, work, ref), head(t, github, strings.TrimPrefix(ref, "origin/")); got != want {
+			t.Errorf("%s is %s, want GitHub's %s", ref, got, want)
+		}
+	}
+	if status := gitIn(t, work, "status", "-sb"); strings.Contains(status, "ahead") || strings.Contains(status, "behind") {
+		t.Errorf("status after adopting: %s", status)
+	}
+	if refs := gitIn(t, work, "for-each-ref", adoptPrefix); refs != "" {
+		t.Errorf("private refs left behind:\n%s", refs)
+	}
+	_ = gitea
+}
 
-	// And it still notices a commit that has not been pushed.
-	if err := os.WriteFile(filepath.Join(work, "d.txt"), []byte("four\n"), 0o644); err != nil {
-		t.Fatal(err)
+// TestRefusedAdoptionChangesNothing: one branch without a twin, and not a
+// single ref moves -- not the others that could have, not origin.
+func TestRefusedAdoptionChangesNothing(t *testing.T) {
+	work, gitea, github := scenarioWithBranchAndTag(t)
+	gitIn(t, work, "checkout", "-q", "-b", "experiment")
+	commitIn(t, work, "c.txt", "three\n")
+	gitIn(t, work, "checkout", "-q", "main")
+	before := gitIn(t, work, "for-each-ref")
+
+	err := Adopt(context.Background(), work, github, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "experiment is not on GitHub") {
+		t.Fatalf("Adopt = %v, want a refusal naming experiment", err)
 	}
-	if _, err := gitOutput(ctx, work, "add", "."); err != nil {
-		t.Fatal(err)
+	if after := gitIn(t, work, "for-each-ref"); after != before {
+		t.Errorf("refs changed although nothing was adopted:\nbefore\n%s\nafter\n%s", before, after)
 	}
-	if _, err := gitOutput(ctx, work, "commit", "-qm", "unpushed"); err != nil {
-		t.Fatal(err)
+	if got := remoteURL(t, work, "origin"); got != gitea {
+		t.Errorf("origin is %q, want it left at %q", got, gitea)
 	}
-	risk := CheckAdoptable(ctx, work)
-	if !strings.Contains(risk.Reason, "never pushed") {
-		t.Errorf("an unpushed commit went unnoticed without an upstream: %q", risk.Reason)
+}
+
+// TestAdoptAdviceSaysWhatCanBeDone checks the words a person reads when an
+// adoption is refused: what will NOT happen, and the one way to fix it.
+func TestAdoptAdviceSaysWhatCanBeDone(t *testing.T) {
+	advice := AdoptAdvice([]AdoptProblem{{Ref: "main", Kind: NotLikeGitHub, Local: 1}})
+	for _, want := range []string{"Nothing was changed", "does NOT have", "delete that repository on GitHub", "run migrate again"} {
+		if !strings.Contains(advice, want) {
+			t.Errorf("advice lacks %q:\n%s", want, advice)
+		}
+	}
+	if strings.Contains(advice, "git pull") {
+		t.Errorf("advice for local work suggests a pull, which would not help:\n%s", advice)
 	}
 }
 
@@ -309,7 +374,7 @@ func TestAdoptRefusesDifferentFiles(t *testing.T) {
 
 	before := head(t, work)
 	err := Adopt(ctx, work, github, nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "different files") {
+	if err == nil || !strings.Contains(err.Error(), "main is different on GitHub") {
 		t.Fatalf("Adopt = %v, want a refusal over different files", err)
 	}
 	if head(t, work) != before {
@@ -321,5 +386,46 @@ func TestAdoptRefusesDifferentFiles(t *testing.T) {
 	data, _ := os.ReadFile(filepath.Join(work, "a.txt"))
 	if string(data) != "one\n" {
 		t.Errorf("a.txt now reads %q", data)
+	}
+}
+
+// TestAdoptAfterMigratingTheWorkOnThisComputer is the whole story from the
+// user's side. A finished project, a little more work done locally and never
+// pushed -- a commit on main, a new branch, a tag -- then a redacting
+// migration that takes that work along, as migrate now does. The copy then
+// takes on GitHub's history without a single refusal: every branch and tag it
+// has has a twin with the same files.
+func TestAdoptAfterMigratingTheWorkOnThisComputer(t *testing.T) {
+	work, gitea, github := scenario(t)
+	commitIn(t, work, "extra.txt", "last touches\n")
+	gitIn(t, work, "checkout", "-q", "-b", "experiment")
+	commitIn(t, work, "idea.txt", "an idea\n")
+	gitIn(t, work, "checkout", "-q", "main")
+	gitIn(t, work, "tag", "final")
+
+	// The migration: Gitea's mirror, the copy's work fetched into it (as
+	// migrate.addLocalWork does), then redacted.
+	mirror := filepath.Join(filepath.Dir(gitea), "mirror.git")
+	if out, err := exec.Command("git", "clone", "-q", "--mirror", gitea, mirror).CombinedOutput(); err != nil {
+		t.Fatalf("clone: %v: %s", err, out)
+	}
+	gitIn(t, mirror, "fetch", "-q", "--no-tags", work,
+		"refs/heads/main:refs/heads/main", "refs/heads/experiment:refs/heads/experiment",
+		"refs/tags/final:refs/tags/final")
+	redactedCopy(t, mirror, github)
+
+	if risk := CheckAdoptable(context.Background(), work, githubSide(github)); risk.Reason != "" {
+		t.Fatalf("refused after a migration that took the work along: %s", risk.Reason)
+	}
+	if err := Adopt(context.Background(), work, github, nil, nil); err != nil {
+		t.Fatalf("Adopt: %v", err)
+	}
+	for _, ref := range []string{"main", "experiment", "final"} {
+		if got, want := head(t, work, ref), head(t, github, ref); got != want {
+			t.Errorf("%s is %s, want GitHub's %s", ref, got, want)
+		}
+	}
+	if authors := gitIn(t, work, "log", "--all", "--format=%ae", "--not", "--remotes=origin"); authors != "" {
+		t.Errorf("commits outside GitHub's history remain reachable:\n%s", authors)
 	}
 }

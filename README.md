@@ -317,18 +317,24 @@ being a clone of the Gitea repository. `both` and `gitea` are greyed out, becaus
 
 ```
  > *  ~/Git/ascii-art   adopt   takes on GitHub's rewritten history; Gitea remote removed
-   -  ~/Git/go-reloaded         2 commits never pushed to Gitea; push them first
+   -  ~/Git/go-reloaded         main has 2 commits that GitHub does not have
 ```
 
 The history is fetched from GitHub rather than reproduced locally, so the
 result matches by construction rather than by getting a rewrite exactly right.
-Your working tree is untouched — redaction changes who made a commit, not what
-it contains, and that is checked rather than assumed: if GitHub's files differ
-from the clone's, because it is another project or the clone is behind Gitea,
-nothing is changed. A clone with uncommitted changes, with commits that never
-reached Gitea, or on a branch whose state cannot be compared at all, is refused
-until that is dealt with: once it belongs to GitHub it can never push to Gitea
-again.
+Every branch and every tag moves, not only the one checked out: one left on
+the original history would publish it again on its next push. Each moves onto
+its twin on GitHub, which is harmless exactly when the twin has the same files —
+redaction changes who made a commit, not what it contains — so that is what is
+checked, for all of them, before anything moves. Your working tree is
+untouched.
+
+A clone is refused, with nothing changed, when it has something GitHub's copy
+does not: uncommitted changes, a commit made after the migration, a branch or
+tag that exists only here. The message says which, and what can be done. Work
+that GitHub lacks cannot be added to a redacted copy afterwards, which is why
+`migrate` takes [the work on your computer](#work-that-is-only-on-your-computer)
+along in the first place.
 
 A migration that redacted anything says so before offering, and offers with the
 answer already yes:

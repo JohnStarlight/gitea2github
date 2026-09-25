@@ -237,6 +237,60 @@ func (c *Client) BranchTree(ctx context.Context, owner, name, branch string) (tr
 	return out.Commit.Commit.Tree.SHA, true, nil
 }
 
+// TagTree returns the tree a tag points at, following an annotated tag to its
+// commit. found is false when the tag does not exist.
+//
+// It is BranchTree's counterpart for tags: a tag left on the original history
+// after an adoption would publish it on the next push --tags, so a tag's twin
+// has to be found and compared as a branch's is.
+func (c *Client) TagTree(ctx context.Context, owner, name, tag string) (tree string, found bool, err error) {
+	repo := fmt.Sprintf("/repos/%s/%s/git", url.PathEscape(owner), url.PathEscape(name))
+	segments := strings.Split(tag, "/")
+	for i, s := range segments {
+		segments[i] = url.PathEscape(s)
+	}
+
+	type object struct {
+		Type string `json:"type"`
+		SHA  string `json:"sha"`
+	}
+	var ref struct {
+		Object object `json:"object"`
+	}
+	err = c.do(ctx, http.MethodGet, repo+"/ref/tags/"+strings.Join(segments, "/"), nil, &ref)
+	var nf *NotFoundError
+	switch {
+	case errors.As(err, &nf):
+		return "", false, nil
+	case err != nil:
+		return "", false, err
+	}
+
+	// An annotated tag is an object of its own, pointing at the commit.
+	target := ref.Object
+	for i := 0; target.Type == "tag" && i < 5; i++ {
+		var annotated struct {
+			Object object `json:"object"`
+		}
+		if err := c.do(ctx, http.MethodGet, repo+"/tags/"+target.SHA, nil, &annotated); err != nil {
+			return "", false, err
+		}
+		target = annotated.Object
+	}
+	if target.Type != "commit" {
+		return "", true, nil
+	}
+	var commit struct {
+		Tree struct {
+			SHA string `json:"sha"`
+		} `json:"tree"`
+	}
+	if err := c.do(ctx, http.MethodGet, repo+"/commits/"+target.SHA, nil, &commit); err != nil {
+		return "", false, err
+	}
+	return commit.Tree.SHA, true, nil
+}
+
 // IsEmpty reports whether a repository that exists has nothing in it.
 //
 // A migration that created a repository and was interrupted before its push
