@@ -369,6 +369,19 @@ func migrateOne(ctx context.Context, repo gitea.Repo, gh *github.Client, opts Op
 		return finish(StatusFailed, fmt.Sprintf("push failed: %v: %s", err, out))
 	}
 
+	// --- Default branch -----------------------------------------------------
+	// A push carries branches, not which of them is the main one, so GitHub
+	// picks one itself -- not necessarily Gitea's. Set to match, if Gitea's
+	// is among what was pushed. Not a failure if it cannot be: the history
+	// is all there, and the default is one click on GitHub.
+	if branch := repo.DefaultBr; branch != "" {
+		if _, err := runGit(ctx, pushFrom, "", "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
+			if err := gh.SetDefaultBranch(ctx, opts.GitHubUser, target, branch); err != nil {
+				return finish(StatusMigrated, fmt.Sprintf("default branch not set to %s: %v", branch, err))
+			}
+		}
+	}
+
 	return finish(StatusMigrated, "")
 }
 
@@ -555,8 +568,9 @@ func rewriteHistory(ctx context.Context, src, dst string, m *redact.Mapper) erro
 		return fmt.Errorf("fast-import: %v: %s", importWait, strings.TrimSpace(importErr.String()))
 	}
 
-	// fast-import recreates refs but not HEAD, and a bare repository with a
-	// dangling HEAD makes the destination pick an arbitrary default branch.
+	// fast-import recreates refs but not HEAD. A push does not carry HEAD
+	// either -- the default branch on GitHub is set explicitly after the push
+	// -- but the rewritten repository is kept a faithful copy all the same.
 	if head, err := runGit(ctx, src, "", "symbolic-ref", "HEAD"); err == nil && head != "" {
 		if out, err := runGit(ctx, dst, "", "symbolic-ref", "HEAD", head); err != nil {
 			return fmt.Errorf("setting HEAD to %s: %v: %s", head, err, out)
