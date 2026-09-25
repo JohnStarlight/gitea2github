@@ -446,10 +446,21 @@ func rewriteHistory(ctx context.Context, src, dst string, m *redact.Mapper) erro
 		return fmt.Errorf("starting fast-export: %w", err)
 	}
 	if err := imp.Start(); err != nil {
+		_ = export.Process.Kill()
+		_ = export.Wait()
 		return fmt.Errorf("starting fast-import: %w", err)
 	}
 
 	filterErr := redact.FilterStream(exported, imported, m)
+
+	// A filter that stopped early stopped reading, and fast-export blocks on
+	// the full pipe it is still writing into. Waiting for it then waits
+	// forever. Its output is of no use any more -- nothing is pushed from a
+	// failed rewrite, and the mirror it reads from is untouched -- so it is
+	// stopped rather than waited out.
+	if filterErr != nil {
+		_ = export.Process.Kill()
+	}
 
 	// Close the import side first: fast-import only finishes once its stdin is
 	// closed, so waiting before closing would deadlock.
@@ -459,6 +470,14 @@ func rewriteHistory(ctx context.Context, src, dst string, m *redact.Mapper) erro
 
 	switch {
 	case filterErr != nil:
+		// Usually the filter failed because fast-import died and the next
+		// write hit a broken pipe, which explains nothing; fast-import's
+		// stderr says why. Both are kept, because the filter can also fail
+		// on its own account, and then fast-import only complains that its
+		// input stopped.
+		if reason := strings.TrimSpace(importErr.String()); reason != "" {
+			return fmt.Errorf("filtering history: %w; fast-import said: %s", filterErr, reason)
+		}
 		return fmt.Errorf("filtering history: %w", filterErr)
 	case closeErr != nil:
 		return fmt.Errorf("closing fast-import input: %w", closeErr)
