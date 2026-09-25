@@ -18,6 +18,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -114,6 +115,14 @@ type Options struct {
 
 	Log func(format string, args ...any)
 
+	// Targets is the name each repository took on GitHub, keyed by its Gitea
+	// full name in lower case ("teammate/quadchecker"). A clone is matched by
+	// the whole of that name, because the last segment alone is not enough:
+	// two owners' repositories of the same name land under different names,
+	// and one of them would otherwise be repointed at the other. A clone
+	// whose repository is missing here falls back to its own name.
+	Targets map[string]string
+
 	// client replaces the GitHub client Verify would build, so tests can
 	// answer its questions without an account behind them.
 	client *github.Client
@@ -200,11 +209,7 @@ func relinkOne(ctx context.Context, path string, gh *github.Client, opts Options
 		return res
 	}
 
-	// Derive the repository name from the last path segment of the remote URL,
-	// dropping the conventional .git suffix. This is the same name the migrator
-	// used when creating the GitHub side, so the two halves line up.
-	name := strings.TrimSuffix(filepath.Base(strings.TrimSuffix(origin, "/")), ".git")
-	target := github.SanitizeName(name)
+	target := opts.targetFor(origin)
 	res.NewURL = fmt.Sprintf("https://github.com/%s/%s.git", opts.GitHubUser, target)
 
 	if opts.Verify && gh != nil {
@@ -453,6 +458,36 @@ func anyRedacted(addrs []string) bool {
 		}
 	}
 	return false
+}
+
+// targetFor is the name a clone's repository took on GitHub.
+func (o Options) targetFor(origin string) string {
+	full := GiteaFullName(origin)
+	if name, ok := o.Targets[strings.ToLower(full)]; ok && name != "" {
+		return name
+	}
+	return github.SanitizeName(path.Base(full))
+}
+
+// GiteaFullName is the owner/name a clone's origin URL points at, in any of
+// the forms git accepts: https://host/sub/path/owner/name.git,
+// ssh://git@host:2222/owner/name.git and the scp-like git@host:owner/name.git.
+func GiteaFullName(origin string) string {
+	rest := origin
+	if i := strings.Index(rest, "://"); i >= 0 {
+		rest = rest[i+3:]
+		if slash := strings.Index(rest, "/"); slash >= 0 {
+			rest = rest[slash+1:]
+		}
+	} else if colon := strings.Index(rest, ":"); colon >= 0 {
+		rest = rest[colon+1:]
+	}
+	rest = strings.TrimSuffix(strings.TrimSuffix(rest, "/"), ".git")
+	segments := strings.Split(rest, "/")
+	if len(segments) >= 2 {
+		return segments[len(segments)-2] + "/" + segments[len(segments)-1]
+	}
+	return rest
 }
 
 // modeFor resolves the destination for one working copy.
