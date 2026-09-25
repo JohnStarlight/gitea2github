@@ -7,6 +7,7 @@ import (
 	"github.com/JohnStarlight/gitea2github/internal/gitea"
 	"github.com/JohnStarlight/gitea2github/internal/migrate"
 	"github.com/JohnStarlight/gitea2github/internal/redact"
+	"github.com/JohnStarlight/gitea2github/internal/relink"
 	"github.com/JohnStarlight/gitea2github/internal/ui"
 )
 
@@ -299,5 +300,26 @@ func TestCountReadsAsASentence(t *testing.T) {
 		if got := count(n, "history was", "histories were"); got != want {
 			t.Errorf("count(%d) = %q, want %q", n, got, want)
 		}
+	}
+}
+
+// TestRelinkPlanKeepsTheAdoption covers the printed plan for a clone whose
+// GitHub copy is a rewritten history. What will happen to it is an adoption
+// -- the Gitea remote removed, the branch reset onto GitHub's commits -- and
+// relabelling it with the chosen destination would describe an ordinary
+// repoint that is not what runs.
+func TestRelinkPlanKeepsTheAdoption(t *testing.T) {
+	probe := []relink.Result{
+		{Path: "/a", Action: "planned", Redacted: true,
+			Reason: "take on GitHub's rewritten history; Gitea remote removed"},
+		{Path: "/b", Action: "planned", Reason: "anything"},
+	}
+	plan := relinkPlanFromProbe(probe, nil, nil, relink.ModeGitHub, "gitea")
+
+	if got := plan[0].Reason; got != probe[0].Reason {
+		t.Errorf("rewritten clone described as %q, want %q", got, probe[0].Reason)
+	}
+	if got, want := plan[1].Reason, relink.Describe(relink.ModeGitHub, "gitea"); got != want {
+		t.Errorf("ordinary clone described as %q, want %q", got, want)
 	}
 }
