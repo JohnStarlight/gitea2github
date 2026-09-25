@@ -107,14 +107,9 @@ Credentials are looked up in this order:
 }
 
 // giteaFlags registers the flags every Gitea-touching command shares.
-
-// giteaFlags registers the flags every Gitea-touching command shares.
 func giteaFlags(fs *flag.FlagSet) *string {
 	return fs.String("gitea-url", defaultGiteaURL, "Gitea base URL")
 }
-
-// resolveGitea builds an authenticated Gitea client and reports which
-// credential store answered, so failures are self-diagnosing.
 
 // resolveGitea builds an authenticated Gitea client and reports which
 // credential store answered, so failures are self-diagnosing.
@@ -141,10 +136,6 @@ func giteaLogin(ctx context.Context, client *gitea.Client) (string, error) {
 	return login, nil
 }
 
-// cmdDoctor verifies the whole credential chain before the user commits to a
-// migration. Finding out that a token is too narrow after twenty repositories
-// have already moved is far worse than finding out up front.
-
 // serialLog returns a progress printer safe to call from several workers.
 //
 // Both migrations and relink scans run concurrently, and without this the
@@ -157,15 +148,6 @@ func serialLog() func(string, ...any) {
 		fmt.Printf("  "+format+"\n", args...)
 	}
 }
-
-// printResults renders the per-repository outcome table and the tally beneath
-// it. It deliberately returns nothing: the same renderer prints the plan and
-// the outcome, and a plan is not a failure even when it contains problems.
-//
-// Rows that will actually be created are numbered, because the plan doubles as
-// the list the user picks from when choosing visibility. Numbering only those
-// rows keeps the numbers meaningful: there is nothing to choose about a
-// repository that is being skipped.
 
 // forDisplay strips any credentials from a URL before it is printed.
 //
@@ -208,9 +190,6 @@ func expandHome(path string) string {
 	return filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(path, "~"), "/"))
 }
 
-// relinkPlanFromProbe narrows the scan to the chosen clones and relabels each
-// with the destination picked for it.
-
 // shortenPath replaces the home directory with ~ so a column of paths stays
 // readable on a narrow terminal.
 func shortenPath(path string) string {
@@ -220,15 +199,6 @@ func shortenPath(path string) string {
 	}
 	return "~" + strings.TrimPrefix(path, home)
 }
-
-// buildRows turns the repository list and its dry-run probe into the rows the
-// selection screen displays.
-//
-// The probe supplies the two facts the Gitea listing cannot: whether the
-// repository is already on GitHub, and whether it would fail outright. Both
-// become Blocked, which keeps such rows on screen with their reason rather
-// than quietly dropping them -- "where did my repository go?" is a worse
-// question to leave a user with than a greyed-out line answering it.
 
 // plural picks a word form, so counts read as sentences rather than as
 // "1 repositor(y/ies)".
@@ -242,10 +212,6 @@ func plural(n int, one, many string) string {
 // gitUserEmail returns the address git is configured to commit with, used as
 // the suggested answer when asking which address to keep unredacted. It is the
 // address the user's own commits almost certainly carry.
-
-// gitUserEmail returns the address git is configured to commit with, used as
-// the suggested answer when asking which address to keep unredacted. It is the
-// address the user's own commits almost certainly carry.
 func gitUserEmail() string {
 	out, err := exec.Command("git", "config", "--get", "user.email").Output()
 	if err != nil {
@@ -253,8 +219,6 @@ func gitUserEmail() string {
 	}
 	return strings.TrimSpace(string(out))
 }
-
-// cmdRelink repoints local working copies at GitHub.
 
 // stringList collects a flag that may be repeated, so that several addresses
 // can be kept with separate --keep-email arguments rather than one

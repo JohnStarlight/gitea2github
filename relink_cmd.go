@@ -1,21 +1,7 @@
 // The relink command and the offer that follows a migration, which repoint local
 // clones away from Gitea -- or, for a repository whose history was rewritten,
 // hand the clone over to the rewritten copy.
-// Command gitea2github migrates Git repositories from a Gitea instance to
-// GitHub, with all branches and tags intact, and repoints local clones at the
-// new home.
-//
-// It exists because doing this by hand — create repository, copy URL, add
-// remote, push, repeat — is both tedious and lossy: the manual route usually
-// carries over only the branch that happened to be checked out.
-//
-// Typical session:
-//
-//	gitea2github doctor                 # check credentials and scopes
-//	gitea2github list                   # see what would be considered
-//	gitea2github migrate --dry-run      # see what would happen
-//	gitea2github migrate                # do it
-//	gitea2github relink ~/Git           # repoint local clones
+
 package main
 
 import (
@@ -238,9 +224,6 @@ func cmdRelink(ctx context.Context, args []string) error {
 	return nil
 }
 
-// printRelinkResults renders the relink table, used for both the plan and the
-// outcome.
-
 // giteaTargets works out the name each Gitea repository took on GitHub the
 // way the migration did, so that a relink run on its own finds renamed
 // repositories. Names typed on the selection screen are not recorded
@@ -384,11 +367,6 @@ func offerRelink(ctx context.Context, prompt *ui.Prompter, clonesRoot, giteaURL,
 	printRelinkResults(results)
 }
 
-// serialLog returns a progress printer safe to call from several workers.
-//
-// Both migrations and relink scans run concurrently, and without this the
-// progress lines interleave mid-word.
-
 // relinkChoice is what the repointing screen was left with.
 type relinkChoice struct {
 	only      map[string]bool
@@ -476,15 +454,6 @@ func withNames(targets, names map[string]string) map[string]string {
 // The screen is given a function rather than the options themselves so that it
 // stays free of the migrate and relink packages' configuration, and so a test
 // can drive it with a fake that touches no disk.
-
-// chooseRelink opens the repointing screen and returns what was chosen.
-
-// relinkScanner returns the callback the repointing screen uses to look at
-// another directory.
-//
-// The screen is given a function rather than the options themselves so that it
-// stays free of the migrate and relink packages' configuration, and so a test
-// can drive it with a fake that touches no disk.
 func relinkScanner(ctx context.Context, base relink.Options) tui.Rescan {
 	return func(root string) ([]tui.Clone, error) {
 		opts := base
@@ -501,8 +470,6 @@ func relinkScanner(ctx context.Context, base relink.Options) tui.Rescan {
 		return clonesFromProbe(ctx, found, base.Mode), nil
 	}
 }
-
-// clonesFromProbe turns a scan into rows for the screen.
 
 // clonesFromProbe turns a scan into rows for the screen.
 func clonesFromProbe(ctx context.Context, probe []relink.Result, mode string) []tui.Clone {
@@ -528,9 +495,6 @@ func clonesFromProbe(ctx context.Context, probe []relink.Result, mode string) []
 	return clones
 }
 
-// expandHome turns a leading ~ back into the home directory, so a path typed
-// on the screen behaves the way the same path typed at a shell would.
-
 // relinkPlanFromProbe narrows the scan to the chosen clones and relabels each
 // with the destination picked for it.
 func relinkPlanFromProbe(probe []relink.Result, only map[string]bool,
@@ -555,9 +519,6 @@ func relinkPlanFromProbe(probe []relink.Result, only map[string]bool,
 	}
 	return plan
 }
-
-// shortenPath replaces the home directory with ~ so a column of paths stays
-// readable on a narrow terminal.
 
 // printRelinkResults renders the relink table, used for both the plan and the
 // outcome.
@@ -592,7 +553,3 @@ func wrongName(r relink.Result) bool {
 	return r.Action == "skipped" && r.Source != "" &&
 		(strings.HasPrefix(r.Reason, "no repository named") || strings.Contains(r.Reason, "does not match this clone"))
 }
-
-// filterByName keeps only the repositories whose name matches one of the given
-// names, comparing case-insensitively and accepting either the bare name or the
-// owner/name form.
