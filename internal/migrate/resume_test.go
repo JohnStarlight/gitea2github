@@ -83,6 +83,9 @@ type fakeGitHub struct {
 
 	mu     sync.Mutex
 	events []string // "create", "patch private=true" ..., in order
+
+	// homepage is the website the repository was created with.
+	homepage string
 	// refsAtPatch is what the stand-in held when its visibility was changed,
 	// to check that nothing had been pushed yet.
 	refsAtPatch string
@@ -124,7 +127,16 @@ func (f *fakeGitHub) RoundTrip(req *http.Request) (*http.Response, error) {
 		f.events = append(f.events, "patch private="+map[bool]string{true: "true", false: "false"}[private])
 		return reply(200, repo)
 
+	case req.Method == http.MethodPut && req.URL.Path == "/repos/me/demo/topics":
+		var body struct{ Names []string }
+		_ = json.NewDecoder(req.Body).Decode(&body)
+		f.events = append(f.events, "topics "+strings.Join(body.Names, ","))
+		return reply(200, body)
+
 	case req.Method == http.MethodPost && req.URL.Path == "/user/repos":
+		var body struct{ Homepage string }
+		_ = json.NewDecoder(req.Body).Decode(&body)
+		f.homepage = body.Homepage
 		f.events = append(f.events, "create")
 		f.exists = true
 		return reply(201, repo)
@@ -293,5 +305,31 @@ func TestDefaultBranchFollowsGitea(t *testing.T) {
 		if strings.Join(f.events, ",") != strings.Join(c.want, ",") {
 			t.Errorf("Gitea default %q: calls %v, want %v", c.giteaDefault, f.events, c.want)
 		}
+	}
+}
+
+// TestWebsiteAndTopicsComeAlong: what the repository page says about the
+// project beside its code is carried over rather than typed in again.
+func TestWebsiteAndTopicsComeAlong(t *testing.T) {
+	s := newResumeScene(t)
+	f := &fakeGitHub{exists: false}
+	f.scene = s
+	repo := s.repo(false)
+	repo.Website = "https://example.com/demo"
+	got := Run(context.Background(), []gitea.Repo{repo}, Options{
+		GiteaUser: "me", GitHubUser: "me", GitHubTok: "t0ken-for-tests", Concurrency: 1,
+		Topics: func(context.Context, gitea.Repo) ([]string, error) {
+			return []string{"go", "Zone01.gr"}, nil
+		},
+		client: newTestClient(f),
+	})[0]
+	if got.Status != StatusMigrated || got.Reason != "" {
+		t.Fatalf("%s: %s", got.Status, got.Reason)
+	}
+	if f.homepage != "https://example.com/demo" {
+		t.Errorf("created with homepage %q", f.homepage)
+	}
+	if want := "create,topics go,zone01-gr"; strings.Join(f.events, ",") != want {
+		t.Errorf("calls %v, want %s", f.events, want)
 	}
 }

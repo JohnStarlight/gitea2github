@@ -40,6 +40,7 @@ type Repo struct {
 	Name        string `json:"name"`
 	FullName    string `json:"full_name"`
 	Description string `json:"description"`
+	Website     string `json:"website"`
 	Private     bool   `json:"private"`
 	Empty       bool   `json:"empty"`
 	Archived    bool   `json:"archived"`
@@ -184,6 +185,20 @@ func (c *Client) Repo(ctx context.Context, owner, name string) (Repo, error) {
 		return Repo{}, err
 	}
 	return r, nil
+}
+
+// Topics returns a repository's topics. They are not part of the repository
+// listing, so this is one more request per repository, asked only of the
+// ones being migrated.
+func (c *Client) Topics(ctx context.Context, owner, name string) ([]string, error) {
+	var out struct {
+		Topics []string `json:"topics"`
+	}
+	path := fmt.Sprintf("/repos/%s/%s/topics", url.PathEscape(owner), url.PathEscape(name))
+	if err := c.get(ctx, path, &out); err != nil {
+		return nil, err
+	}
+	return out.Topics, nil
 }
 
 // get performs an authenticated GET and decodes the JSON body into out.

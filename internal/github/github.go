@@ -345,6 +345,55 @@ func (c *Client) IsEmpty(ctx context.Context, owner, name string) (bool, error) 
 	return false, err
 }
 
+// SetAbout sets what the repository page shows about it beside the code: its
+// description and website. Used for a repository that already existed, empty,
+// and so was not created with them.
+func (c *Client) SetAbout(ctx context.Context, owner, name, description, homepage string) error {
+	path := fmt.Sprintf("/repos/%s/%s", url.PathEscape(owner), url.PathEscape(name))
+	return c.do(ctx, http.MethodPatch, path,
+		map[string]any{"description": description, "homepage": homepage}, nil)
+}
+
+// SetTopics replaces a repository's topics with these, made into ones GitHub
+// accepts; see SanitizeTopics.
+func (c *Client) SetTopics(ctx context.Context, owner, name string, topics []string) error {
+	path := fmt.Sprintf("/repos/%s/%s/topics", url.PathEscape(owner), url.PathEscape(name))
+	return c.do(ctx, http.MethodPut, path, map[string]any{"names": SanitizeTopics(topics)}, nil)
+}
+
+// SanitizeTopics maps topics to ones GitHub accepts: lower case, letters,
+// digits and hyphens, starting with a letter or digit, at most 50 characters,
+// at most 20 of them. Gitea is more permissive -- it allows dots, for one --
+// and a topic GitHub rejects would fail the whole request.
+func SanitizeTopics(topics []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, t := range topics {
+		var b strings.Builder
+		for _, r := range strings.ToLower(strings.TrimSpace(t)) {
+			switch {
+			case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+				b.WriteRune(r)
+			default:
+				b.WriteRune('-')
+			}
+		}
+		topic := strings.Trim(b.String(), "-")
+		if len(topic) > 50 {
+			topic = strings.TrimRight(topic[:50], "-")
+		}
+		if topic == "" || seen[topic] {
+			continue
+		}
+		seen[topic] = true
+		out = append(out, topic)
+		if len(out) == 20 {
+			break
+		}
+	}
+	return out
+}
+
 // SetDefaultBranch makes branch the one GitHub shows and clones by default.
 func (c *Client) SetDefaultBranch(ctx context.Context, owner, name, branch string) error {
 	path := fmt.Sprintf("/repos/%s/%s", url.PathEscape(owner), url.PathEscape(name))
@@ -395,10 +444,11 @@ func (c *Client) TipAuthors(ctx context.Context, owner, name string) ([]string, 
 //
 // Gitea's description is carried over so the migrated repositories do not land
 // on GitHub as an undifferentiated wall of names.
-func (c *Client) CreateRepo(ctx context.Context, name, description string, private bool) (Repo, error) {
+func (c *Client) CreateRepo(ctx context.Context, name, description, homepage string, private bool) (Repo, error) {
 	body := map[string]any{
 		"name":        name,
 		"description": description,
+		"homepage":    homepage,
 		"private":     private,
 		// The source repository already has its own README, license and
 		// history. Letting GitHub auto-initialise would create a commit that

@@ -34,8 +34,9 @@ first. Beyond that:
   as `exists` and left untouched; a repository the interruption left empty is
   finished instead.
 - **Visibility is never widened by accident.** Repositories are created exactly
-  as they are on Gitea unless you say otherwise, one by one. Descriptions come
-  along too, instead of being retyped.
+  as they are on Gitea unless you say otherwise, one by one. Descriptions,
+  websites, topics and the default branch come along too, instead of being
+  set again by hand.
 - **Your clones get repointed** — including [pushing to both
   servers](#repointing-your-clones) if you are not done with Gitea.
 - **Thirty repositories are one command**, run in parallel, with a summary.
