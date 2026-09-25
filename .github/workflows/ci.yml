@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, Go ${{ matrix.go }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        go: [stable]
+        include:
+          # The oldest Go the README promises. Linux only: on recent macOS,
+          # binaries linked by Go before 1.23 do not start at all.
+          - os: ubuntu-latest
+            go: "1.21"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+
+      # The tests make commits of their own. A runner has no identity to
+      # make them with, and Git for Windows would turn the line endings of
+      # the files they write and read back.
+      - name: Configure git
+        run: |
+          git config --global user.name "CI"
+          git config --global user.email "ci@example.com"
+          git config --global core.autocrlf false
+          git config --global init.defaultBranch main
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Formatting
+        if: runner.os != 'Windows'
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Not gofmt-formatted:"; echo "$unformatted"; exit 1
+          fi
+
+      # The race detector needs cgo, which the Windows runner is not set up
+      # for; there the tests run without it.
+      - name: Test
+        if: runner.os != 'Windows'
+        run: go test -race ./...
+
+      - name: Test (Windows)
+        if: runner.os == 'Windows'
+        run: go test ./...
+
+  build:
+    name: build (BSD)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Cross-compile
+        run: |
+          for target in freebsd/amd64 openbsd/amd64 netbsd/amd64 freebsd/arm64; do
+            echo "== $target"
+            GOOS=${target%/*} GOARCH=${target#*/} go build -o /dev/null .
+          done
