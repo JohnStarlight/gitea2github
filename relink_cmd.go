@@ -443,7 +443,10 @@ func relinkPlanFromProbe(probe []relink.Result, only map[string]bool,
 		if only != nil && !only[r.Path] {
 			continue
 		}
-		if r.Action == "planned" {
+		// A rewritten history is adopted whatever destination was picked, and
+		// its row already says so; relabelling it would promise an ordinary
+		// repoint that is not what runs.
+		if r.Action == "planned" && !r.Redacted {
 			mode := fallback
 			if m, ok := modes[r.Path]; ok && m != "" {
 				mode = m
