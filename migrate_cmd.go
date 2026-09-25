@@ -115,7 +115,13 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		return err
 	}
 	if *only != "" {
-		repos = filterByName(repos, strings.Split(*only, ","))
+		names := strings.Split(*only, ",")
+		// A misspelt name would otherwise vanish without a word, and a run
+		// asked for three repositories would quietly migrate two.
+		if missing := unmatchedNames(repos, names); len(missing) > 0 {
+			fmt.Printf("Not found on Gitea: %s\n", strings.Join(missing, ", "))
+		}
+		repos = filterByName(repos, names)
 	}
 	if len(repos) == 0 {
 		fmt.Println("nothing to migrate")
@@ -564,6 +570,13 @@ func findLocalWork(ctx context.Context, root, giteaURL string, repos []gitea.Rep
 	if err != nil {
 		return nil
 	}
+	// Said outright: a directory that is not there would otherwise read as
+	// one that was checked and found to hold nothing.
+	if info, err := os.Stat(root); err != nil || !info.IsDir() {
+		fmt.Printf("There is no directory %s, so your copies were NOT checked for work that is not on Gitea.\n",
+			shortenPath(root))
+		return nil
+	}
 	clones, err := relink.Clones(ctx, root, parsed.Host)
 	if err != nil {
 		fmt.Printf("Could not look for your copies under %s: %v\n", shortenPath(root), err)
@@ -823,6 +836,20 @@ func countMatching(repos []gitea.Repo, pred func(gitea.Repo) bool) int {
 
 // plural picks a word form, so counts read as sentences rather than as
 // "1 repositor(y/ies)".
+
+// unmatchedNames is the names given to --only that match no repository, as
+// they were typed.
+func unmatchedNames(repos []gitea.Repo, names []string) []string {
+	var missing []string
+	for _, n := range names {
+		n = strings.TrimSpace(n)
+		if n == "" || len(filterByName(repos, []string{n})) > 0 {
+			continue
+		}
+		missing = append(missing, n)
+	}
+	return missing
+}
 
 // filterByName keeps only the repositories whose name matches one of the given
 // names, comparing case-insensitively and accepting either the bare name or the
