@@ -63,7 +63,7 @@ func cmdDoctor(ctx context.Context, args []string) error {
 	if err != nil {
 		fail("credential", "%v", err)
 	} else {
-		ok("credential", "user=%s via %s", c.Username, c.Source)
+		ok("credential", "via %s", c.Source)
 		settingsURL := strings.TrimRight(*giteaURL, "/") + "/user/settings/applications"
 
 		// Version needs no particular scope, so it separates "the server or the
@@ -74,6 +74,23 @@ func cmdDoctor(ctx context.Context, args []string) error {
 		switch {
 		case err == nil:
 			ok("reachable", "%s (Gitea %s)", forDisplay(*giteaURL), version)
+
+			// Whose token it is decides which repositories count as yours.
+			// A stored username that disagrees is harmless now -- it is not
+			// what is used -- but it is worth knowing about.
+			if login, err := client.Login(ctx); err != nil {
+				var scopeErr *gitea.ScopeError
+				if errors.As(err, &scopeErr) {
+					fail("identity", "%s", scopeErr.Message)
+					hint("create a token with BOTH read:user and write:repository\nat %s", settingsURL)
+				} else {
+					fail("identity", "%v", err)
+				}
+			} else if c.Username != creds.PlaceholderUser && !strings.EqualFold(c.Username, login) {
+				ok("identity", "%s (the credential is stored under %q, which Gitea ignores)", login, c.Username)
+			} else {
+				ok("identity", "%s", login)
+			}
 
 			// Listing needs the broadest scope of anything the migrator does,
 			// so probing it here turns a later mysterious 403 into advice.
@@ -147,7 +164,11 @@ func cmdList(ctx context.Context, args []string) error {
 		return err
 	}
 
-	client, c, err := resolveGitea(*giteaURL)
+	client, _, err := resolveGitea(*giteaURL)
+	if err != nil {
+		return err
+	}
+	login, err := giteaLogin(ctx, client)
 	if err != nil {
 		return err
 	}
@@ -165,7 +186,7 @@ func cmdList(ctx context.Context, args []string) error {
 			visibility = "private"
 		}
 		ownership := "own"
-		if !r.OwnedBy(c.Username) {
+		if !r.OwnedBy(login) {
 			ownership = "collaborator"
 		}
 		var notes []string

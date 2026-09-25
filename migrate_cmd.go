@@ -85,6 +85,10 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	giteaUser, err := giteaLogin(ctx, client)
+	if err != nil {
+		return err
+	}
 	ghCred, err := creds.GitHub()
 	if err != nil {
 		return err
@@ -122,7 +126,7 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	// Destination names are worked out from the whole list before anything
 	// runs, so two repositories that want the same one are told apart here
 	// rather than by whichever worker happened to finish first.
-	targets := migrate.Targets(repos, giteaCred.Username)
+	targets := migrate.Targets(repos, giteaUser)
 	if clashes := migrate.Collisions(repos); len(clashes) > 0 {
 		for name, sharing := range clashes {
 			fmt.Printf("\n%d repositories are called %q; renaming to keep both:\n",
@@ -149,7 +153,7 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		// another sweep of the API, which is what lets the screen respond to a
 		// keystroke instead of to a round trip.
 		probeOptions := migrate.Options{
-			GiteaUser:             giteaCred.Username,
+			GiteaUser:             giteaUser,
 			GiteaToken:            giteaCred.Token,
 			GitHubUser:            ghLogin,
 			GitHubTok:             ghCred.Token,
@@ -173,7 +177,7 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		if len(keepEmails) > 0 {
 			seedKeep = keepEmails[0]
 		}
-		model := tui.NewModel(buildRows(repos, probe, giteaCred.Username, targets),
+		model := tui.NewModel(buildRows(repos, probe, giteaUser, targets),
 			*collabs, *forks, *archived, *redactEmails, seedKeep)
 		screenErr := tui.Run(
 			fmt.Sprintf("%s  ->  github.com/%s", forDisplay(*giteaURL), ghLogin), model)
@@ -213,7 +217,7 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		// --yes, which means "do not ask me anything".
 		if prompt.Interactive() && !*dryRun && !*assumeYes {
 			fmt.Println()
-			answers := askExclusions(prompt, repos, giteaCred.Username, given, exclusions{
+			answers := askExclusions(prompt, repos, giteaUser, given, exclusions{
 				Collaborations: *collabs,
 				Forks:          *forks,
 				Archived:       *archived,
@@ -236,7 +240,7 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	}
 
 	options := migrate.Options{
-		GiteaUser:             giteaCred.Username,
+		GiteaUser:             giteaUser,
 		GiteaToken:            giteaCred.Token,
 		GitHubUser:            ghLogin,
 		GitHubTok:             ghCred.Token,

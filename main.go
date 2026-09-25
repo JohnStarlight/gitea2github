@@ -130,6 +130,17 @@ func resolveGitea(giteaURL string) (*gitea.Client, creds.Credential, error) {
 	return gitea.New(giteaURL, c.Token), c, nil
 }
 
+// giteaLogin asks Gitea whose token this is. Every decision about which
+// repositories are "yours" rests on the answer, so it comes from the server
+// rather than from the username stored beside the token.
+func giteaLogin(ctx context.Context, client *gitea.Client) (string, error) {
+	login, err := client.Login(ctx)
+	if err != nil {
+		return "", fmt.Errorf("identifying Gitea user: %w", err)
+	}
+	return login, nil
+}
+
 // cmdDoctor verifies the whole credential chain before the user commits to a
 // migration. Finding out that a token is too narrow after twenty repositories
 // have already moved is far worse than finding out up front.
