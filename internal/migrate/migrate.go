@@ -51,6 +51,10 @@ type Result struct {
 	Reason        string        // why it was skipped, or what failed
 	Took          time.Duration // wall-clock time, useful for spotting the slow ones
 
+	// WithLocalWork marks a repository that took work from a copy on this
+	// computer as well as from Gitea.
+	WithLocalWork bool
+
 	// Resume marks a repository already on GitHub with nothing in it: the
 	// remains of a run that created it and was interrupted before its push
 	// landed. It is pushed into rather than created, and rather than being
@@ -127,6 +131,11 @@ type Options struct {
 	// same replacement everywhere, whichever subset of repositories was
 	// chosen.
 	RedactOnly map[string]bool
+
+	// LocalWork is work found in copies of the repositories on this computer
+	// that Gitea does not have, keyed by Gitea full name. What it can take is
+	// added to the mirror before anything is redacted or pushed.
+	LocalWork map[string]LocalWork
 
 	// client replaces the GitHub client Run would build, so tests can answer
 	// its questions without an account behind them.
@@ -274,6 +283,9 @@ func migrateOne(ctx context.Context, repo gitea.Repo, gh *github.Client, opts Op
 		case opts.Redacts(repo.FullName):
 			steps = "would clone, redact emails, create and push"
 		}
+		if work, ok := opts.LocalWork[repo.FullName]; ok && work.takesAnything() {
+			steps += "; with the work from this computer"
+		}
 		return finish(StatusPlanned, steps)
 	}
 
@@ -296,6 +308,17 @@ func migrateOne(ctx context.Context, repo gitea.Repo, gh *github.Client, opts Op
 	// it, which would fail the whole mirror push, so drop them here.
 	if out, err := pruneUnpushableRefs(ctx, mirrorPath); err != nil {
 		return finish(StatusFailed, fmt.Sprintf("pruning refs: %v: %s", err, out))
+	}
+
+	// --- Work from this computer -------------------------------------------
+	// Added before redaction, so that it goes through the same rewrite as
+	// everything else and nothing of it reaches GitHub un-redacted.
+	if work, ok := opts.LocalWork[repo.FullName]; ok && work.takesAnything() {
+		opts.Log("adding the work from %s to %s", work.Clone, repo.FullName)
+		if err := addLocalWork(ctx, mirrorPath, work); err != nil {
+			return finish(StatusFailed, fmt.Sprintf("adding work from %s: %v", work.Clone, err))
+		}
+		res.WithLocalWork = true
 	}
 
 	// --- Optional email redaction ------------------------------------------
