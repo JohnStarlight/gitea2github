@@ -262,7 +262,7 @@ func giteaTargets(ctx context.Context, giteaURL string) (map[string]string, erro
 // Deliberately quiet about its own failures: the migration has already
 // succeeded by this point, and a directory that cannot be scanned is a reason
 // to say so and stop, not to report the whole run as failed.
-func offerRelink(ctx context.Context, prompt *ui.Prompter, giteaURL, ghLogin, ghToken string,
+func offerRelink(ctx context.Context, prompt *ui.Prompter, clonesRoot, giteaURL, ghLogin, ghToken string,
 	assumeYes bool, redacted int, targets map[string]string) {
 	// Never without being asked. Repointing rewrites remotes in directories
 	// the migration never touched, so --yes, which is consent to the migration
@@ -279,10 +279,9 @@ func offerRelink(ctx context.Context, prompt *ui.Prompter, giteaURL, ghLogin, gh
 		return
 	}
 
-	cwd, err := os.Getwd()
-	if err != nil {
-		return
-	}
+	// The directory the migration looked in for work not yet on Gitea: the
+	// copies found there are the ones to repoint.
+	cwd := clonesRoot
 
 	// A migration that copied histories verbatim leaves clones that still
 	// work, so repointing them is tidying and the default is no. One that

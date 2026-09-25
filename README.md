@@ -388,6 +388,29 @@ by looking at it, by a person or by a tool, and `relink` falls back on exactly
 that when it cannot compare commits with GitHub. A shape that varied from run
 to run could not be recognised at all.
 
+## Work that is only on your computer
+
+The migration copies from Gitea, so a commit you made after your last push —
+the last touches to a finished project — would not reach GitHub. Before it
+asks you to confirm, `migrate` looks through your copies of the repositories
+(in the current directory, or wherever `--clones` points) and says what they
+have that Gitea does not:
+
+```
+Checked your copies under ~/Git. This work is on this computer but NOT on Gitea:
+  JohnStarlight/ascii-art  (~/Git/ascii-art)
+      main: 1 commit; experiment: new branch, 2 commits; tag v2
+
+Put this work on GitHub too? [Y/n]
+Also send it to Gitea? [y/N]
+```
+
+Taken, it goes through the same redaction as everything else. Your copy is
+only read, never changed. Two things are left out and say so: a branch where
+Gitea also has commits your copy lacks, since taking one side would lose the
+other; and a repository with work in more than one copy, since which one is
+meant is yours to say.
+
 ## What gets skipped, and why
 
 By default the migrator leaves alone anything where "copy it to my account" is
@@ -502,6 +525,9 @@ gitea2github relink --dry-run ~/Git       # plan only
 | `--jobs` | `4` | Repositories transferred at once |
 | `--redact-emails` | `false` | Rewrite every history to hide addresses |
 | `--keep-email` | none | An address of yours, rewritten to your GitHub no-reply (repeatable) |
+| `--clones` | current directory | Where your copies of the repositories are |
+| `--local-work` | `include` | Work in those copies that Gitea lacks: `include` it on GitHub, or `skip` it |
+| `--push-local-work` | `false` | Also send that work to Gitea |
 
 ### relink
 

@@ -469,6 +469,26 @@ func (o Options) targetFor(origin string) string {
 	return github.SanitizeName(path.Base(full))
 }
 
+// Clones finds the working copies under root whose origin is on giteaHost,
+// keyed by the lower-cased Gitea full name of the repository they are copies
+// of. One repository can have more than one copy.
+func Clones(ctx context.Context, root, giteaHost string) (map[string][]string, error) {
+	paths, err := findRepos(root)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]string{}
+	for _, p := range paths {
+		origin, err := gitOutput(ctx, p, "remote", "get-url", "origin")
+		if err != nil || !strings.Contains(origin, giteaHost) {
+			continue
+		}
+		full := strings.ToLower(GiteaFullName(origin))
+		out[full] = append(out[full], p)
+	}
+	return out, nil
+}
+
 // GiteaFullName is the owner/name a clone's origin URL points at, in any of
 // the forms git accepts: https://host/sub/path/owner/name.git,
 // ssh://git@host:2222/owner/name.git and the scp-like git@host:owner/name.git.
