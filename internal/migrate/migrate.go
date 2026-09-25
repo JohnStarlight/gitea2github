@@ -137,6 +137,11 @@ type Options struct {
 	// added to the mirror before anything is redacted or pushed.
 	LocalWork map[string]LocalWork
 
+	// Topics, when set, returns a repository's topics on Gitea, to be given to
+	// it on GitHub too. A function rather than a Gitea client so that this
+	// package asks Gitea nothing itself.
+	Topics func(ctx context.Context, repo gitea.Repo) ([]string, error)
+
 	// client replaces the GitHub client Run would build, so tests can answer
 	// its questions without an account behind them.
 	client *github.Client
@@ -349,7 +354,7 @@ func migrateOne(ctx context.Context, repo gitea.Repo, gh *github.Client, opts Op
 		}
 	} else {
 		opts.Log("creating github.com/%s/%s", opts.GitHubUser, target)
-		created, err := gh.CreateRepo(ctx, target, repo.Description, res.Private)
+		created, err := gh.CreateRepo(ctx, target, repo.Description, repo.Website, res.Private)
 		if err != nil {
 			return finish(StatusFailed, fmt.Sprintf("creating GitHub repo: %v", err))
 		}
@@ -369,20 +374,40 @@ func migrateOne(ctx context.Context, repo gitea.Repo, gh *github.Client, opts Op
 		return finish(StatusFailed, fmt.Sprintf("push failed: %v: %s", err, out))
 	}
 
-	// --- Default branch -----------------------------------------------------
+	// --- What the repository page says about it ----------------------------
+	// None of this is a failure if it cannot be done: the history is all
+	// there, and each of these is one click on GitHub. What went wrong is
+	// reported beside the result.
+	var notes []string
+
 	// A push carries branches, not which of them is the main one, so GitHub
 	// picks one itself -- not necessarily Gitea's. Set to match, if Gitea's
-	// is among what was pushed. Not a failure if it cannot be: the history
-	// is all there, and the default is one click on GitHub.
+	// is among what was pushed.
 	if branch := repo.DefaultBr; branch != "" {
 		if _, err := runGit(ctx, pushFrom, "", "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
 			if err := gh.SetDefaultBranch(ctx, opts.GitHubUser, target, branch); err != nil {
-				return finish(StatusMigrated, fmt.Sprintf("default branch not set to %s: %v", branch, err))
+				notes = append(notes, fmt.Sprintf("default branch not set to %s: %v", branch, err))
 			}
 		}
 	}
+	// A repository created here was created with its description and
+	// website; one that already existed, empty, was not.
+	if res.Resume && (repo.Description != "" || repo.Website != "") {
+		if err := gh.SetAbout(ctx, opts.GitHubUser, target, repo.Description, repo.Website); err != nil {
+			notes = append(notes, fmt.Sprintf("description and website not set: %v", err))
+		}
+	}
+	if opts.Topics != nil {
+		topics, err := opts.Topics(ctx, repo)
+		if err == nil && len(topics) > 0 {
+			err = gh.SetTopics(ctx, opts.GitHubUser, target, topics)
+		}
+		if err != nil {
+			notes = append(notes, fmt.Sprintf("topics not set: %v", err))
+		}
+	}
 
-	return finish(StatusMigrated, "")
+	return finish(StatusMigrated, strings.Join(notes, "; "))
 }
 
 // Redacts reports whether this repository's history is to be rewritten.

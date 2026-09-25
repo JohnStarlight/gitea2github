@@ -55,7 +55,7 @@ func TestCreateRepoRetriesAfterRateLimit(t *testing.T) {
 		response(http.StatusCreated, nil, `{"name":"x","clone_url":"https://github.com/me/x.git"}`),
 	}}
 	var waited []time.Duration
-	repo, err := testClient(rt, &waited).CreateRepo(context.Background(), "x", "d", true)
+	repo, err := testClient(rt, &waited).CreateRepo(context.Background(), "x", "d", "", true)
 	if err != nil {
 		t.Fatalf("CreateRepo: %v", err)
 	}

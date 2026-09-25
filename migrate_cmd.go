@@ -270,6 +270,9 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		RedactOnly:            redactOnly,
 		Target:                targets,
 		RenameTo:              renames,
+		Topics: func(ctx context.Context, r gitea.Repo) ([]string, error) {
+			return client.Topics(ctx, r.Owner.Login, r.Name)
+		},
 	}
 
 	if !useTUI {
