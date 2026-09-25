@@ -323,3 +323,33 @@ func TestRelinkPlanKeepsTheAdoption(t *testing.T) {
 		t.Errorf("ordinary clone described as %q, want %q", got, want)
 	}
 }
+
+// TestRelinkTargetsCarryTheRenames covers what the migration hands to the
+// repointing that follows it: every name worked out for the list, with what
+// the run actually used laid over it -- including a name typed on the screen,
+// which is recorded nowhere else.
+func TestRelinkTargetsCarryTheRenames(t *testing.T) {
+	targets := map[string]string{
+		"JohnStarlight/quadchecker": "quadchecker",
+		"teammate/quadchecker":      "quadchecker-teammate",
+		"JohnStarlight/lem-in":      "lem-in",
+	}
+	results := []migrate.Result{
+		{Source: "teammate/quadchecker", Target: "JohnStarlight/quadchecker-team"},
+		{Source: "JohnStarlight/quadchecker", Target: "JohnStarlight/quadchecker"},
+	}
+	got := relinkTargets(targets, results)
+	want := map[string]string{
+		"johnstarlight/quadchecker": "quadchecker",
+		"teammate/quadchecker":      "quadchecker-team",
+		"johnstarlight/lem-in":      "lem-in",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s -> %q, want %q", k, got[k], v)
+		}
+	}
+}

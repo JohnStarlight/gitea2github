@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/JohnStarlight/gitea2github/internal/creds"
@@ -88,6 +89,16 @@ func cmdRelink(ctx context.Context, args []string) error {
 		return fmt.Errorf("identifying GitHub user: %w", err)
 	}
 
+	// Not fatal: without the list, each clone is matched by its own name,
+	// which is right for every repository the migration did not rename --
+	// and the check against GitHub's files catches the ones it did.
+	targets, err := giteaTargets(ctx, *giteaURL)
+	if err != nil {
+		first, _, _ := strings.Cut(err.Error(), "\n")
+		fmt.Printf("\nCould not read the repository list from Gitea (%s);\n"+
+			"each clone is matched by its own name.\n", first)
+	}
+
 	// Where a clone should push is the one decision here with consequences, so
 	// ask it outright rather than letting the default decide silently.
 	// The screen needs to know what is out there before it can offer anything,
@@ -101,6 +112,7 @@ func cmdRelink(ctx context.Context, args []string) error {
 		Mode:          *pushTo,
 		Verify:        *verify,
 		DryRun:        true,
+		Targets:       targets,
 	}
 	fmt.Printf("\nLooking for clones under %s...\n", shortenPath(root))
 	probe, err := relink.Run(ctx, probeOptions)
@@ -174,6 +186,7 @@ func cmdRelink(ctx context.Context, args []string) error {
 		Only:          only,
 		ModeFor:       modeFor,
 		GitEnv:        migrate.CredentialEnv("x-access-token", ghCred.Token),
+		Targets:       targets,
 	}
 
 	// The plan is the scan narrowed to what was chosen. Running the sweep a
@@ -223,6 +236,26 @@ func cmdRelink(ctx context.Context, args []string) error {
 // printRelinkResults renders the relink table, used for both the plan and the
 // outcome.
 
+// giteaTargets works out the name each Gitea repository took on GitHub the
+// way the migration did, so that a relink run on its own finds renamed
+// repositories. Names typed on the selection screen are not recorded
+// anywhere and cannot be recovered here.
+func giteaTargets(ctx context.Context, giteaURL string) (map[string]string, error) {
+	client, _, err := resolveGitea(giteaURL)
+	if err != nil {
+		return nil, err
+	}
+	login, err := giteaLogin(ctx, client)
+	if err != nil {
+		return nil, err
+	}
+	repos, err := client.ListRepos(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return relinkTargets(migrate.Targets(repos, login), nil), nil
+}
+
 // offerRelink asks whether to repoint the local clones, and opens the
 // repointing screen if the answer is yes.
 //
@@ -230,7 +263,7 @@ func cmdRelink(ctx context.Context, args []string) error {
 // succeeded by this point, and a directory that cannot be scanned is a reason
 // to say so and stop, not to report the whole run as failed.
 func offerRelink(ctx context.Context, prompt *ui.Prompter, giteaURL, ghLogin, ghToken string,
-	assumeYes bool, redacted int) {
+	assumeYes bool, redacted int, targets map[string]string) {
 	// Never without being asked. Repointing rewrites remotes in directories
 	// the migration never touched, so --yes, which is consent to the migration
 	// that was described, is not consent to this.
@@ -286,6 +319,7 @@ func offerRelink(ctx context.Context, prompt *ui.Prompter, giteaURL, ghLogin, gh
 	probe, err := relink.Run(ctx, relink.Options{
 		Root: cwd, GiteaHost: parsed.Host, GitHubUser: ghLogin, GitHubTok: ghToken,
 		OldRemoteName: "gitea", Mode: relink.ModeGitHub, Verify: true, DryRun: true,
+		Targets: targets,
 	})
 	if err != nil {
 		fmt.Printf("  could not scan %s: %v\n", shortenPath(cwd), err)
@@ -300,7 +334,8 @@ func offerRelink(ctx context.Context, prompt *ui.Prompter, giteaURL, ghLogin, gh
 	base := relink.Options{
 		GiteaHost: parsed.Host, GitHubUser: ghLogin, GitHubTok: ghToken,
 		OldRemoteName: "gitea", Mode: relink.ModeGitHub, Verify: true,
-		GitEnv: migrate.CredentialEnv("x-access-token", ghToken),
+		GitEnv:  migrate.CredentialEnv("x-access-token", ghToken),
+		Targets: targets,
 	}
 	only, modes, chosenRoot, cancelled, screenErr := chooseRelink(ctx,
 		probe, relink.ModeGitHub, "gitea", cwd, ghLogin, relinkScanner(ctx, base))
