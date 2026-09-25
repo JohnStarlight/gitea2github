@@ -166,11 +166,52 @@ type NotFoundError struct{ Path string }
 
 func (e *NotFoundError) Error() string { return "github: not found: " + e.Path }
 
+// StatusError is a refusal that is neither a 404 nor a rate limit, kept with
+// its status so that a caller for whom one particular refusal is an answer
+// rather than a failure can tell it apart.
+type StatusError struct {
+	Code int
+	msg  string
+}
+
+func (e *StatusError) Error() string { return e.msg }
+
+// ErrEmptyRepository reports a repository that exists with nothing in it.
+var ErrEmptyRepository = errors.New("the GitHub repository is empty")
+
+// HasCommit reports whether a commit is part of the repository.
+//
+// It is how a rewritten history is recognised. A migration that copied the
+// history verbatim carried every commit across under its own hash; one that
+// rewrote it carried none of them, whatever addresses the rewrite left behind.
+// Asking about a commit settles which, where looking at addresses cannot: a
+// project redacted with only its owner's own address kept comes out with no
+// address in the redacted shape at all.
+//
+// A repository created but never pushed to answers ErrEmptyRepository, which
+// is neither answer: nothing matches, and nothing was rewritten either.
+func (c *Client) HasCommit(ctx context.Context, owner, name, sha string) (bool, error) {
+	path := fmt.Sprintf("/repos/%s/%s/commits/%s",
+		url.PathEscape(owner), url.PathEscape(name), url.PathEscape(sha))
+	err := c.do(ctx, http.MethodGet, path, nil, nil)
+	var status *StatusError
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.As(err, &status) && status.Code == http.StatusUnprocessableEntity:
+		// "No commit found for SHA".
+		return false, nil
+	case errors.As(err, &status) && status.Code == http.StatusConflict:
+		return false, ErrEmptyRepository
+	}
+	return false, err
+}
+
 // TipAuthors returns the author and committer addresses of the most recent
 // commits on a repository's default branch.
 //
 // Used to recognise a repository whose history was rewritten to hide
-// addresses. The result of such a rewrite is the only record that it happened,
+// addresses, when HasCommit cannot settle it. The result of such a rewrite is the only record that it happened,
 // and a local clone that still holds the original history cannot push to it --
 // so the difference has to be noticed before somebody tries.
 //
@@ -318,7 +359,8 @@ func (c *Client) doOnce(ctx context.Context, method, path string, encoded []byte
 		if detail == "" {
 			detail = resp.Status
 		}
-		return fmt.Errorf("%s %s: %s", method, path, detail)
+		return &StatusError{Code: resp.StatusCode,
+			msg: fmt.Sprintf("%s %s: %s", method, path, detail)}
 	}
 
 	if out != nil {
