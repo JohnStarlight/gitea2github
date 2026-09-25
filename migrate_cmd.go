@@ -728,6 +728,9 @@ func printResults(results []migrate.Result) {
 			if r.WithLocalWork {
 				detail += ", with the work from this computer"
 			}
+			if r.Reason != "" {
+				detail += "; " + r.Reason
+			}
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", label, r.Status, r.Source, visibility, detail)
 	}
