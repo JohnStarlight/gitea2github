@@ -34,6 +34,7 @@ const (
 	StatusExists   Status = "exists"   // already on GitHub, left alone
 	StatusFailed   Status = "failed"   // something went wrong
 	StatusPlanned  Status = "planned"  // dry run: this is what would happen
+	StatusHeld     Status = "held"     // not migrated, to keep addresses in files from being published
 )
 
 // Result records the outcome for one repository so the CLI can print a summary
@@ -54,6 +55,18 @@ type Result struct {
 	// WithLocalWork marks a repository that took work from a copy on this
 	// computer as well as from Gitea.
 	WithLocalWork bool
+
+	// SourceURL is where the repository is on Gitea, for the instructions
+	// that follow the run.
+	SourceURL string
+
+	// FileAddresses are addresses found inside the files of a repository
+	// whose history was redacted, which redaction does not reach.
+	FileAddresses []FileAddress
+
+	// LFSFiles are files stored with Git LFS. A push carries only their
+	// pointers, so on GitHub they are not the files themselves.
+	LFSFiles []string
 
 	// Resume marks a repository already on GitHub with nothing in it: the
 	// remains of a run that created it and was interrupted before its push
@@ -136,6 +149,13 @@ type Options struct {
 	// that Gitea does not have, keyed by Gitea full name. What it can take is
 	// added to the mirror before anything is redacted or pushed.
 	LocalWork map[string]LocalWork
+
+	// AllowEmailsInFiles lets a redacted repository that would be public go
+	// ahead although its files contain email addresses. Without it such a
+	// repository is held back: redaction was asked for precisely so that
+	// addresses would not be published, and publishing them anyway cannot be
+	// undone.
+	AllowEmailsInFiles bool
 
 	// Topics, when set, returns a repository's topics on Gitea, to be given to
 	// it on GitHub too. A function rather than a Gitea client so that this
@@ -235,6 +255,7 @@ func migrateOne(ctx context.Context, repo gitea.Repo, gh *github.Client, opts Op
 		// reports the same visibility the real run would use. A plan that
 		// omitted this could not be the thing the user chooses from.
 		SourcePrivate: repo.Private,
+		SourceURL:     repo.CloneURL,
 		Private:       destinationIsPrivate(repo, opts.Visibility, opts.VisibilityOverride),
 	}
 	finish := func(status Status, reason string) Result {
@@ -324,6 +345,19 @@ func migrateOne(ctx context.Context, repo gitea.Repo, gh *github.Client, opts Op
 			return finish(StatusFailed, fmt.Sprintf("adding work from %s: %v", work.Clone, err))
 		}
 		res.WithLocalWork = true
+	}
+
+	// --- What the files contain --------------------------------------------
+	// Looked at before anything is created: a repository held back here is
+	// never created at all.
+	scan, err := scanContents(ctx, mirrorPath, opts.Redacts(repo.FullName))
+	if err != nil {
+		return finish(StatusFailed, fmt.Sprintf("looking through the files: %v", err))
+	}
+	res.FileAddresses, res.LFSFiles = scan.addresses, scan.lfsFiles
+	if len(scan.addresses) > 0 && !res.Private && !opts.AllowEmailsInFiles {
+		return finish(StatusHeld, fmt.Sprintf("its files contain %s and it would be public",
+			plural(len(scan.addresses), "an email address", "email addresses")))
 	}
 
 	// --- Optional email redaction ------------------------------------------
@@ -639,6 +673,13 @@ func resumeIsPrivate(source gitea.Repo, existingPrivate bool, mode VisibilityMod
 		return false
 	}
 	return source.Private || existingPrivate
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 func visibilityName(private bool) string {

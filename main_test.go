@@ -1,6 +1,8 @@
 package main
 
 import (
+	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -395,4 +397,43 @@ func TestUnmatchedNamesAreReported(t *testing.T) {
 	if len(got) != 1 || got[0] != "go-reloded" {
 		t.Errorf("unmatchedNames = %q, want [go-reloded]", got)
 	}
+}
+
+// TestLFSReportGivesTheCommands: a repository whose LFS files arrived on
+// GitHub as pointers is named, with the commands that copy the files -- from
+// Gitea's address, to the name it took on GitHub.
+func TestLFSReportGivesTheCommands(t *testing.T) {
+	out := captureStdout(t, func() {
+		printLFS([]migrate.Result{{
+			Source: "me/lem-in", Target: "JohnStarlight/lem-in-team", Status: migrate.StatusMigrated,
+			SourceURL: "https://gitea.example.com/me/lem-in.git",
+			LFSFiles:  []string{"maps/big.txt", "video.mp4"},
+		}})
+	})
+	for _, want := range []string{
+		"me/lem-in uses Git LFS: 2 files are on GitHub as pointers only",
+		"NOT as the files themselves",
+		"git clone --mirror https://gitea.example.com/me/lem-in.git lem-in-team-lfs",
+		"git lfs push --all https://github.com/JohnStarlight/lem-in-team.git",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("report lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+// captureStdout returns what f prints.
+func captureStdout(t *testing.T, f func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := os.Stdout
+	os.Stdout = w
+	f()
+	os.Stdout = saved
+	w.Close()
+	out, _ := io.ReadAll(r)
+	return string(out)
 }

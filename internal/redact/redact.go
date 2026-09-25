@@ -68,6 +68,21 @@ const maxMessageBytes = 4 << 20
 // than leaving an exotic address in place.
 var emailPattern = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)
 
+// FindAddresses returns the distinct addresses in b, in the order they first
+// appear, found the way commit messages are searched.
+func FindAddresses(b []byte) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range emailPattern.FindAll(b, -1) {
+		addr := string(m)
+		if key := strings.ToLower(addr); !seen[key] {
+			seen[key] = true
+			out = append(out, addr)
+		}
+	}
+	return out
+}
+
 // Mapper decides what each address becomes, and remembers its decisions so the
 // same person maps to the same replacement everywhere.
 type Mapper struct {
