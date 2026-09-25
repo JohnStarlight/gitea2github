@@ -47,7 +47,14 @@ func cmdRelink(ctx context.Context, args []string) error {
 	pushTo := fs.String("push-to", relink.ModeGitHub,
 		"where relinked clones should push: github, both, or gitea")
 	noTUI := fs.Bool("no-tui", false, "choose from numbered prompts instead of the full-screen selector")
+	var names stringList
+	fs.Var(&names, "name",
+		"the name a repository took on GitHub, as owner/repo=name, when it is not its own (repeatable)")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	named, err := parseNames(names)
+	if err != nil {
 		return err
 	}
 	switch *pushTo {
@@ -98,6 +105,8 @@ func cmdRelink(ctx context.Context, args []string) error {
 		fmt.Printf("\nCould not read the repository list from Gitea (%s);\n"+
 			"each clone is matched by its own name.\n", first)
 	}
+	// Names given with --name are the most specific thing said, so they win.
+	targets = withNames(targets, named)
 
 	// Where a clone should push is the one decision here with consequences, so
 	// ask it outright rather than letting the default decide silently.
@@ -132,33 +141,29 @@ func cmdRelink(ctx context.Context, args []string) error {
 
 	switch {
 	case !*noTUI && !*dryRun && !*assumeYes && tui.Available():
-		chosen, modes, chosenRoot, screenErr := func() (map[string]bool, map[string]string, string, error) {
-			c, m, r, cancelled, err := chooseRelink(ctx,
-				probe, *pushTo, *oldName, root, ghLogin, relinkScanner(ctx, probeOptions))
-			if cancelled {
-				return nil, nil, "", errScreenCancelled
-			}
-			return c, m, r, err
-		}()
-		if errors.Is(screenErr, errScreenCancelled) {
-			fmt.Println("Cancelled; nothing was changed.")
-			return nil
-		}
+		choice, screenErr := chooseRelink(ctx, probe, *pushTo, *oldName, root, ghLogin, probeOptions)
 		if screenErr != nil {
 			return screenErr
 		}
-		if len(chosen) == 0 {
+		if choice.cancelled {
+			fmt.Println("Cancelled; nothing was changed.")
+			return nil
+		}
+		if len(choice.only) == 0 {
 			fmt.Println("Nothing selected; nothing was changed.")
 			return nil
 		}
-		only, modeFor = chosen, modes
+		only, modeFor = choice.only, choice.modes
+		targets = withNames(targets, choice.renames)
 
-		// The screen may have been pointed at another directory. Its scan is
-		// the one the chosen paths came from, so the plan has to be built from
-		// there rather than from the sweep this command started with.
-		if newRoot := expandHome(chosenRoot); newRoot != root && chosenRoot != "" {
-			root = newRoot
-			probeOptions.Root = root
+		// The screen may have been pointed at another directory, or given
+		// names: either way the scan the plan is built from has to be the one
+		// the choices were made on, not the sweep this command started with.
+		if newRoot := expandHome(choice.root); (newRoot != root && choice.root != "") || len(choice.renames) > 0 {
+			if choice.root != "" {
+				root = newRoot
+			}
+			probeOptions.Root, probeOptions.Targets = root, targets
 			probe, err = relink.Run(ctx, probeOptions)
 			if err != nil {
 				return err
@@ -336,22 +341,25 @@ func offerRelink(ctx context.Context, prompt *ui.Prompter, clonesRoot, giteaURL,
 		GitEnv:  migrate.CredentialEnv("x-access-token", ghToken),
 		Targets: targets,
 	}
-	only, modes, chosenRoot, cancelled, screenErr := chooseRelink(ctx,
-		probe, relink.ModeGitHub, "gitea", cwd, ghLogin, relinkScanner(ctx, base))
+	choice, screenErr := chooseRelink(ctx, probe, relink.ModeGitHub, "gitea", cwd, ghLogin, base)
 	switch {
 	case screenErr != nil:
 		fmt.Printf("  %v\n", screenErr)
 		return
-	case cancelled, len(only) == 0:
+	case choice.cancelled, len(choice.only) == 0:
 		fmt.Println("  Left alone; no remote was changed.")
 		return
 	}
+	only, modes := choice.only, choice.modes
+	base.Targets = withNames(base.Targets, choice.renames)
 
-	// The screen may have been pointed elsewhere, in which case the chosen
-	// paths came from that scan rather than this one.
+	// The screen may have been pointed elsewhere, or given names, in which
+	// case the chosen paths came from a different scan than this one.
 	root := cwd
-	if newRoot := expandHome(chosenRoot); chosenRoot != "" && newRoot != cwd {
-		root = newRoot
+	if newRoot := expandHome(choice.root); (choice.root != "" && newRoot != cwd) || len(choice.renames) > 0 {
+		if choice.root != "" {
+			root = newRoot
+		}
 		base.Root, base.DryRun = root, true
 		if rescanned, err := relink.Run(ctx, base); err == nil {
 			probe = rescanned
@@ -381,25 +389,85 @@ func offerRelink(ctx context.Context, prompt *ui.Prompter, clonesRoot, giteaURL,
 // Both migrations and relink scans run concurrently, and without this the
 // progress lines interleave mid-word.
 
+// relinkChoice is what the repointing screen was left with.
+type relinkChoice struct {
+	only      map[string]bool
+	modes     map[string]string
+	root      string            // the directory it ended up looking at
+	renames   map[string]string // names given with r, by Gitea repository
+	cancelled bool
+}
+
 // chooseRelink opens the repointing screen and returns what was chosen.
 func chooseRelink(ctx context.Context, probe []relink.Result, mode, oldName, root, ghLogin string,
-	rescan tui.Rescan) (
-	only map[string]bool, modes map[string]string, finalRoot string, cancelled bool, err error) {
+	base relink.Options) (relinkChoice, error) {
 
 	clones := clonesFromProbe(ctx, probe, mode)
 
-	model := tui.NewRelinkModel(clones, mode, oldName).WithRoot(shortenPath(root), rescan)
+	model := tui.NewRelinkModel(clones, mode, oldName).
+		WithRoot(shortenPath(root), relinkScanner(ctx, base)).
+		WithRenamer(relinkRenamer(ctx, base))
 	header := fmt.Sprintf("github.com/%s", ghLogin)
 	switch screenErr := tui.Run(header, model); {
 	case errors.Is(screenErr, tui.ErrCancelled):
-		return nil, nil, "", true, nil
+		return relinkChoice{cancelled: true}, nil
 	case screenErr != nil:
-		return nil, nil, "", false, screenErr
+		return relinkChoice{}, screenErr
 	}
-	only, modes = model.Chosen()
+	only, modes := model.Chosen()
 	// The screen may have been pointed somewhere else, in which case the paths
 	// it chose belong to a different directory than the one it opened on.
-	return only, modes, model.Root(), false, nil
+	return relinkChoice{only: only, modes: modes, root: model.Root(), renames: model.Renames()}, nil
+}
+
+// relinkRenamer returns the callback the repointing screen uses to look for
+// one clone's repository under a name typed for it.
+func relinkRenamer(ctx context.Context, base relink.Options) tui.Renamer {
+	return func(c tui.Clone, name string) (tui.Clone, error) {
+		opts := base
+		// The clone's own directory: the scan finds it and nothing else.
+		opts.Root, opts.DryRun = c.Path, true
+		opts.Only, opts.ModeFor = nil, nil
+		opts.Targets = withNames(base.Targets, map[string]string{strings.ToLower(c.Source): name})
+
+		found, err := relink.Run(ctx, opts)
+		if err != nil {
+			return c, err
+		}
+		for _, row := range clonesFromProbe(ctx, found, c.Mode) {
+			if row.Path == c.Path {
+				return row, nil
+			}
+		}
+		return c, fmt.Errorf("%s is no longer a git working copy", c.Display)
+	}
+}
+
+// parseNames reads --name values, owner/repo=name.
+func parseNames(values []string) (map[string]string, error) {
+	out := map[string]string{}
+	for _, v := range values {
+		full, name, ok := strings.Cut(v, "=")
+		full, name = strings.TrimSpace(full), strings.TrimSpace(name)
+		if !ok || name == "" || strings.Count(full, "/") != 1 {
+			return nil, fmt.Errorf("--name %q: expected owner/repo=name, e.g. --name teammate/quadchecker=quadchecker-team", v)
+		}
+		out[strings.ToLower(full)] = name
+	}
+	return out, nil
+}
+
+// withNames lays names over a target map, keyed by Gitea repository in lower
+// case, making each one a name GitHub accepts. Neither map is changed.
+func withNames(targets, names map[string]string) map[string]string {
+	out := make(map[string]string, len(targets)+len(names))
+	for k, v := range targets {
+		out[k] = v
+	}
+	for k, v := range names {
+		out[strings.ToLower(k)] = github.SanitizeName(v)
+	}
+	return out
 }
 
 // relinkScanner returns the callback the repointing screen uses to look at
@@ -408,10 +476,6 @@ func chooseRelink(ctx context.Context, probe []relink.Result, mode, oldName, roo
 // The screen is given a function rather than the options themselves so that it
 // stays free of the migrate and relink packages' configuration, and so a test
 // can drive it with a fake that touches no disk.
-
-// errScreenCancelled marks a screen the user left without confirming, so the
-// caller can tell it apart from a real failure.
-var errScreenCancelled = errors.New("screen cancelled")
 
 // chooseRelink opens the repointing screen and returns what was chosen.
 
@@ -447,6 +511,7 @@ func clonesFromProbe(ctx context.Context, probe []relink.Result, mode string) []
 		clone := tui.Clone{
 			Path: r.Path, Display: shortenPath(r.Path), Mode: mode,
 			Redacted: r.Redacted, Public: r.Public,
+			Source: r.Source, Target: r.Target,
 		}
 		// Anything the scan did not mark as planned cannot be repointed by
 		// this run, so the reason it gave is shown instead of a destination.
@@ -454,6 +519,9 @@ func clonesFromProbe(ctx context.Context, probe []relink.Result, mode string) []
 		// skipped by the scan, with the reason, so it arrives here blocked.
 		if r.Action != "planned" {
 			clone.Blocked = r.Reason
+			if wrongName(r) {
+				clone.Blocked += " -- if it has another name there, press r"
+			}
 		}
 		clones = append(clones, clone)
 	}
@@ -507,6 +575,22 @@ func printRelinkResults(results []relink.Result) {
 	if len(problems) > 0 {
 		fmt.Println(relink.AdoptAdvice(problems))
 	}
+	for _, r := range results {
+		if wrongName(r) {
+			fmt.Println("If a repository has another name on GitHub, give it:\n" +
+				"  gitea2github relink --name owner/repo=name-on-github")
+			fmt.Println()
+			break
+		}
+	}
+}
+
+// wrongName reports a clone that may simply be looking under the wrong name:
+// nothing by its name on GitHub, or something by its name that is another
+// project. A name typed during the migration is the usual reason.
+func wrongName(r relink.Result) bool {
+	return r.Action == "skipped" && r.Source != "" &&
+		(strings.HasPrefix(r.Reason, "no repository named") || strings.Contains(r.Reason, "does not match this clone"))
 }
 
 // filterByName keeps only the repositories whose name matches one of the given

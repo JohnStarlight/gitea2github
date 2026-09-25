@@ -195,9 +195,6 @@ func forDisplay(rawURL string) string {
 	return parsed.String()
 }
 
-// errScreenCancelled marks a screen the user left without confirming, so the
-// caller can tell it apart from a real failure.
-
 // expandHome turns a leading ~ back into the home directory, so a path typed
 // on the screen behaves the way the same path typed at a shell would.
 func expandHome(path string) string {

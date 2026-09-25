@@ -353,3 +353,31 @@ func TestRelinkTargetsCarryTheRenames(t *testing.T) {
 		}
 	}
 }
+
+func TestParseNames(t *testing.T) {
+	got, err := parseNames([]string{"Teammate/QuadChecker=quadchecker-team", " me/lem-in = lem in "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["teammate/quadchecker"] != "quadchecker-team" || got["me/lem-in"] != "lem in" {
+		t.Errorf("parseNames = %v", got)
+	}
+	for _, bad := range []string{"quadchecker=x", "a/b", "a/b=", "a/b/c=x"} {
+		if _, err := parseNames([]string{bad}); err == nil {
+			t.Errorf("parseNames(%q) accepted it", bad)
+		}
+	}
+}
+
+// TestNamesWinAndAreMadeValid: a name given by hand beats the one worked out,
+// and is made into one GitHub accepts, as the migration made it.
+func TestNamesWinAndAreMadeValid(t *testing.T) {
+	targets := map[string]string{"teammate/quadchecker": "quadchecker-teammate"}
+	got := withNames(targets, map[string]string{"Teammate/QuadChecker": "quad team"})
+	if got["teammate/quadchecker"] != "quad-team" {
+		t.Errorf("withNames = %v", got)
+	}
+	if targets["teammate/quadchecker"] != "quadchecker-teammate" {
+		t.Error("withNames changed the map it was given")
+	}
+}
