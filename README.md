@@ -397,6 +397,38 @@ by looking at it, by a person or by a tool, and `relink` falls back on exactly
 that when it cannot compare commits with GitHub. A shape that varied from run
 to run could not be recognised at all.
 
+### Addresses inside files
+
+Redaction rewrites commits: who made them, and what their messages say. It
+does not touch what the files contain — rewriting file contents is how files
+get corrupted — so an address written into a `package.json`, a README or a
+script is published with the repository however carefully the history was
+redacted. It is also in every older version of that file, deleted or not.
+
+So a redacted repository is looked through, every version of every file,
+before anything is created. One that would be public and has addresses in its
+files is held back — not created at all — and the run says where they are and
+what the choices are:
+
+```
+ascii-art was NOT migrated. Its files contain email addresses,
+and it would be public on GitHub:
+  maria@mail.example.gr          in package.json
+  kostas@uni.example.gr          in older versions of README.md
+
+Redaction changes commits, NOT the files inside them. Your choices:
+  1  Migrate it as private instead:
+       press v on its row, or: gitea2github migrate --only ascii-art --visibility=private
+  2  Publish it anyway:
+       gitea2github migrate --only ascii-art --allow-emails-in-files
+  3  Remove the addresses from the files on Gitea first. Older versions
+     keep them too, so this needs the history rewritten (git filter-repo).
+```
+
+A private one goes ahead, with a warning that making it public later would
+publish them. Addresses that belong to nobody are not reported: `example.com`
+and `.invalid`, no-reply addresses, and the `git@github.com` of a clone URL.
+
 ## Work that is only on your computer
 
 The migration copies from Gitea, so a commit you made after your last push —
@@ -538,6 +570,7 @@ gitea2github relink --dry-run ~/Git       # plan only
 | `--clones` | current directory | Where your copies of the repositories are |
 | `--local-work` | `include` | Work in those copies that Gitea lacks: `include` it on GitHub, or `skip` it |
 | `--push-local-work` | `false` | Also send that work to Gitea |
+| `--allow-emails-in-files` | `false` | Publish a redacted repository although its files contain addresses |
 
 ### relink
 
@@ -594,8 +627,9 @@ of their own. Every command takes `--gitea-url`.
 
 ## Known limitations
 
-- **Git LFS objects are not carried across** by `--mirror`. Those repositories
-  need `git lfs fetch --all` / `git lfs push --all` as well.
+- **Git LFS files are not carried across** — only their pointers are. A
+  repository that uses LFS is named at the end of the run, with the commands
+  that copy its files from Gitea to GitHub.
 - **Issues, pull requests and wikis stay on Gitea.** This moves Git data, not
   collaboration metadata.
 - Destination repositories are created under your own account, not organisations.
