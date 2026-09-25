@@ -216,6 +216,11 @@ func TestGiteaFullName(t *testing.T) {
 		"git@gitea.example.com:me/demo.git":                       "me/demo",
 		"ssh://git@gitea.example.com:2222/me/demo.git":            "me/demo",
 		"https://user@gitea.example.com/sub/me/demo.git":          "me/demo",
+		// Local paths, which git reads as paths rather than host:path.
+		`C:\Users\me\repos\me\demo.git`: "me/demo",
+		"C:/Users/me/repos/me/demo.git": "me/demo",
+		"/srv/git/me/demo.git":          "me/demo",
+		"./me/demo:odd/name.git":        "demo:odd/name",
 	}
 	for in, want := range cases {
 		if got := GiteaFullName(in); got != want {

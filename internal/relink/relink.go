@@ -506,14 +506,22 @@ func Clones(ctx context.Context, root, giteaHost string) (map[string][]string, e
 // GiteaFullName is the owner/name a clone's origin URL points at, in any of
 // the forms git accepts: https://host/sub/path/owner/name.git,
 // ssh://git@host:2222/owner/name.git and the scp-like git@host:owner/name.git.
+//
+// A local path is read as a path, as git reads it: the scp-like form only
+// applies when there is no slash before the first colon, and a single letter
+// before it is a Windows drive, not a host.
 func GiteaFullName(origin string) string {
-	rest := origin
-	if i := strings.Index(rest, "://"); i >= 0 {
-		rest = rest[i+3:]
+	rest := strings.ReplaceAll(origin, "\\", "/")
+	colon := strings.Index(rest, ":")
+	switch {
+	case strings.Contains(rest, "://"):
+		rest = rest[strings.Index(rest, "://")+3:]
 		if slash := strings.Index(rest, "/"); slash >= 0 {
 			rest = rest[slash+1:]
 		}
-	} else if colon := strings.Index(rest, ":"); colon >= 0 {
+	case colon == 1 && len(rest) > 2 && rest[2] == '/':
+		// C:/Users/... -- a drive letter.
+	case colon > 0 && !strings.Contains(rest[:colon], "/"):
 		rest = rest[colon+1:]
 	}
 	rest = strings.TrimSuffix(strings.TrimSuffix(rest, "/"), ".git")
