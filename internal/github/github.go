@@ -26,13 +26,45 @@ const apiBase = "https://api.github.com"
 type Client struct {
 	Token string
 	HTTP  *http.Client
+
+	// Log, when non-nil, is told when a request is held back by a rate limit.
+	// A wait of a minute with nothing on screen looks exactly like a hang.
+	Log func(format string, args ...any)
+
+	// wait sleeps for d or until ctx ends. Replaced in tests so that a
+	// back-off can be exercised without taking a minute.
+	wait func(ctx context.Context, d time.Duration) error
 }
 
 // New builds a client with a sensible timeout. Repository creation is fast, but
 // GitHub occasionally takes a few seconds to provision a new repository, so the
 // timeout is generous rather than tight.
 func New(token string) *Client {
-	return &Client{Token: token, HTTP: &http.Client{Timeout: 30 * time.Second}}
+	return &Client{Token: token, HTTP: &http.Client{Timeout: 30 * time.Second}, wait: sleepCtx}
+}
+
+// Retrying on a rate limit is bounded twice over. A few attempts cover the
+// secondary limit, which clears within a minute or two; a wait longer than
+// maxRateLimitWait means the hourly primary limit is exhausted, and sitting
+// silently until it resets would be worse than failing with the reason.
+const (
+	maxRateLimitRetries = 3
+	maxRateLimitWait    = 5 * time.Minute
+
+	// GitHub's guidance for a secondary limit that names no retry time is to
+	// wait at least a minute.
+	defaultRateLimitWait = time.Minute
+)
+
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Repo is the subset of GitHub's repository object we care about.
@@ -192,26 +224,53 @@ func (c *Client) CreateRepo(ctx context.Context, name, description string, priva
 
 // do performs one authenticated API call. A nil body sends no payload; a nil
 // out discards the response.
+//
+// A rate-limited request is waited out and sent again rather than reported as
+// a failure. Creating thirty repositories in a burst is exactly what trips
+// GitHub's secondary limit, and a migration that fails half its repositories
+// for want of a minute's pause has failed for no reason. Retrying is safe for
+// every method, including the POST that creates a repository: a throttled
+// request was refused before it was acted on.
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
-	var payload *bytes.Reader
+	var encoded []byte
 	if body != nil {
-		encoded, err := json.Marshal(body)
-		if err != nil {
+		var err error
+		if encoded, err = json.Marshal(body); err != nil {
 			return err
 		}
-		payload = bytes.NewReader(encoded)
-	} else {
-		payload = bytes.NewReader(nil)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, apiBase+path, payload)
+	wait := c.wait
+	if wait == nil {
+		wait = sleepCtx
+	}
+	for attempt := 0; ; attempt++ {
+		err := c.doOnce(ctx, method, path, encoded, body != nil, out)
+		var limited *RateLimitError
+		if !errors.As(err, &limited) || attempt >= maxRateLimitRetries ||
+			limited.RetryAfter > maxRateLimitWait {
+			return err
+		}
+		if c.Log != nil {
+			c.Log("GitHub rate limit reached; waiting %s before retrying", limited.RetryAfter.Round(time.Second))
+		}
+		if werr := wait(ctx, limited.RetryAfter); werr != nil {
+			return err
+		}
+	}
+}
+
+// doOnce sends one request. The payload is passed already encoded so that a
+// retry sends exactly the same bytes.
+func (c *Client) doOnce(ctx context.Context, method, path string, encoded []byte, hasBody bool, out any) error {
+	req, err := http.NewRequestWithContext(ctx, method, apiBase+path, bytes.NewReader(encoded))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if body != nil {
+	if hasBody {
 		req.Header.Set("Content-Type", "application/json")
 	}
 
@@ -230,6 +289,15 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 		// it is the primary or the secondary rate limit, so check both.
 		if d, ok := retryAfter(resp); ok {
 			return &RateLimitError{RetryAfter: d}
+		}
+		// The secondary limit does not always name a time, and then the only
+		// thing telling it apart from a missing scope is the message.
+		var apiErr struct {
+			Message string `json:"message"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&apiErr)
+		if strings.Contains(strings.ToLower(apiErr.Message), "rate limit") {
+			return &RateLimitError{RetryAfter: defaultRateLimitWait}
 		}
 		return fmt.Errorf("%s %s: %s (check that the token has the `repo` scope)", method, path, resp.Status)
 

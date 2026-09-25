@@ -159,6 +159,7 @@ func Run(ctx context.Context, repos []gitea.Repo, opts Options) []Result {
 	}
 
 	gh := github.New(opts.GitHubTok)
+	gh.Log = opts.Log
 
 	// Results are written by index, so each worker owns exactly one slot and no
 	// mutex is needed to protect the slice itself.
