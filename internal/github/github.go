@@ -108,6 +108,39 @@ func (c *Client) Login(ctx context.Context) (string, error) {
 	return who.Login, err
 }
 
+// TokenScopes returns the scopes GitHub reports for the token. reported is
+// false for tokens whose permissions GitHub does not list this way --
+// fine-grained personal access tokens -- which have to be taken on trust.
+func (c *Client) TokenScopes(ctx context.Context) (scopes []string, reported bool, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBase+"/user", nil)
+	if err != nil {
+		return nil, false, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, false, fmt.Errorf("GET /user: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, false, fmt.Errorf("GET /user: %s", resp.Status)
+	}
+	values, ok := resp.Header[http.CanonicalHeaderKey("X-OAuth-Scopes")]
+	if !ok {
+		return nil, false, nil
+	}
+	for _, v := range values {
+		for _, s := range strings.Split(v, ",") {
+			if s = strings.TrimSpace(s); s != "" {
+				scopes = append(scopes, s)
+			}
+		}
+	}
+	return scopes, true, nil
+}
+
 // Identity returns the username, the numeric id and the no-reply address they
 // combine into.
 //
