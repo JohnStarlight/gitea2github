@@ -112,11 +112,16 @@ func (f *fakeGitHub) RoundTrip(req *http.Request) (*http.Response, error) {
 		return reply(200, []any{})
 
 	case req.Method == http.MethodPatch && req.URL.Path == "/repos/me/demo":
-		var body struct{ Private bool }
+		var body map[string]any
 		_ = json.NewDecoder(req.Body).Decode(&body)
-		f.private = body.Private
+		if branch, ok := body["default_branch"].(string); ok {
+			f.events = append(f.events, "default "+branch)
+			return reply(200, repo)
+		}
+		private, _ := body["private"].(bool)
+		f.private = private
 		f.refsAtPatch = f.scene.refs(f.scene.github)
-		f.events = append(f.events, "patch private="+map[bool]string{true: "true", false: "false"}[body.Private])
+		f.events = append(f.events, "patch private="+map[bool]string{true: "true", false: "false"}[private])
 		return reply(200, repo)
 
 	case req.Method == http.MethodPost && req.URL.Path == "/user/repos":
@@ -257,6 +262,36 @@ func TestResumeVisibility(t *testing.T) {
 		repo := gitea.Repo{FullName: "me/demo", Private: c.sourcePrivate}
 		if got := resumeIsPrivate(repo, c.existing, c.mode, c.override); got != c.want {
 			t.Errorf("%s: private = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// TestDefaultBranchFollowsGitea: a push carries branches but not which one is
+// the main one, so it is set on GitHub to Gitea's, after the push -- and only
+// when that branch was pushed at all.
+func TestDefaultBranchFollowsGitea(t *testing.T) {
+	for _, c := range []struct {
+		giteaDefault string
+		want         []string
+	}{
+		{"feature", []string{"create", "default feature"}},
+		{"gone", []string{"create"}}, // not among what was pushed
+		{"", []string{"create"}},
+	} {
+		s := newResumeScene(t)
+		f := &fakeGitHub{exists: false}
+		f.scene = s
+		repo := s.repo(false)
+		repo.DefaultBr = c.giteaDefault
+		got := Run(context.Background(), []gitea.Repo{repo}, Options{
+			GiteaUser: "me", GitHubUser: "me", GitHubTok: "t0ken-for-tests", Concurrency: 1,
+			client: newTestClient(f),
+		})[0]
+		if got.Status != StatusMigrated {
+			t.Fatalf("%q: %s: %s", c.giteaDefault, got.Status, got.Reason)
+		}
+		if strings.Join(f.events, ",") != strings.Join(c.want, ",") {
+			t.Errorf("Gitea default %q: calls %v, want %v", c.giteaDefault, f.events, c.want)
 		}
 	}
 }

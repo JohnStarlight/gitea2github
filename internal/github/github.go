@@ -345,6 +345,12 @@ func (c *Client) IsEmpty(ctx context.Context, owner, name string) (bool, error) 
 	return false, err
 }
 
+// SetDefaultBranch makes branch the one GitHub shows and clones by default.
+func (c *Client) SetDefaultBranch(ctx context.Context, owner, name, branch string) error {
+	path := fmt.Sprintf("/repos/%s/%s", url.PathEscape(owner), url.PathEscape(name))
+	return c.do(ctx, http.MethodPatch, path, map[string]any{"default_branch": branch}, nil)
+}
+
 // SetPrivate changes the visibility of an existing repository.
 func (c *Client) SetPrivate(ctx context.Context, owner, name string, private bool) error {
 	path := fmt.Sprintf("/repos/%s/%s", url.PathEscape(owner), url.PathEscape(name))
