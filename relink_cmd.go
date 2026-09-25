@@ -450,14 +450,10 @@ func clonesFromProbe(ctx context.Context, probe []relink.Result, mode string) []
 		}
 		// Anything the scan did not mark as planned cannot be repointed by
 		// this run, so the reason it gave is shown instead of a destination.
-		switch {
-		case r.Action != "planned":
+		// A clone that cannot take on a rewritten history was already marked
+		// skipped by the scan, with the reason, so it arrives here blocked.
+		if r.Action != "planned" {
 			clone.Blocked = r.Reason
-		case r.Redacted:
-			// Only asked of the clones it can matter for. Taking on a
-			// rewritten history is the one operation here that can lose work,
-			// and the screen has to know before it offers it.
-			clone.Risk = relink.CheckAdoptable(ctx, r.Path).Reason
 		}
 		clones = append(clones, clone)
 	}
@@ -501,11 +497,16 @@ func printRelinkResults(results []relink.Result) {
 	fmt.Println()
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "ACTION\tPATH\tGITHUB\tDETAIL")
+	var problems []relink.AdoptProblem
 	for _, r := range results {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.Action, shortenPath(r.Path), r.NewURL, r.Reason)
+		problems = append(problems, r.AdoptProblems...)
 	}
 	_ = w.Flush()
 	fmt.Println()
+	if len(problems) > 0 {
+		fmt.Println(relink.AdoptAdvice(problems))
+	}
 }
 
 // filterByName keeps only the repositories whose name matches one of the given
