@@ -381,3 +381,18 @@ func TestNamesWinAndAreMadeValid(t *testing.T) {
 		t.Error("withNames changed the map it was given")
 	}
 }
+
+// TestUnmatchedNamesAreReported: a misspelt --only name must not simply vanish.
+func TestUnmatchedNamesAreReported(t *testing.T) {
+	var repos []gitea.Repo
+	for _, full := range []string{"me/linear-stats", "me/go-reloaded"} {
+		owner, name, _ := strings.Cut(full, "/")
+		r := gitea.Repo{Name: name, FullName: full}
+		r.Owner.Login = owner
+		repos = append(repos, r)
+	}
+	got := unmatchedNames(repos, []string{"linear-stats", " go-reloded ", "ME/GO-RELOADED", ""})
+	if len(got) != 1 || got[0] != "go-reloded" {
+		t.Errorf("unmatchedNames = %q, want [go-reloded]", got)
+	}
+}
