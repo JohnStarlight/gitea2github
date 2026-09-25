@@ -200,6 +200,43 @@ func (c *Client) HasCommit(ctx context.Context, owner, name, sha string) (bool, 
 	return false, err
 }
 
+// BranchTree returns the tree a branch points at: what its files are, apart
+// from who committed them.
+//
+// It is how a rewritten copy is told from a different project. Redaction
+// changes every commit's hash and none of its files, so a copy of this
+// project rewritten to hide addresses has the same tree at the same branch,
+// and a different project that happens to share its name does not. found is
+// false when the branch does not exist.
+func (c *Client) BranchTree(ctx context.Context, owner, name, branch string) (tree string, found bool, err error) {
+	// Each segment escaped on its own: a branch called feature/x is two
+	// segments of the path, not one containing %2F.
+	segments := strings.Split(branch, "/")
+	for i, s := range segments {
+		segments[i] = url.PathEscape(s)
+	}
+	path := fmt.Sprintf("/repos/%s/%s/branches/%s",
+		url.PathEscape(owner), url.PathEscape(name), strings.Join(segments, "/"))
+	var out struct {
+		Commit struct {
+			Commit struct {
+				Tree struct {
+					SHA string `json:"sha"`
+				} `json:"tree"`
+			} `json:"commit"`
+		} `json:"commit"`
+	}
+	err = c.do(ctx, http.MethodGet, path, nil, &out)
+	var nf *NotFoundError
+	switch {
+	case errors.As(err, &nf):
+		return "", false, nil
+	case err != nil:
+		return "", false, err
+	}
+	return out.Commit.Commit.Tree.SHA, true, nil
+}
+
 // IsEmpty reports whether a repository that exists has nothing in it.
 //
 // A migration that created a repository and was interrupted before its push

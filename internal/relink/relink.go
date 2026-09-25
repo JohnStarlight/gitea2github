@@ -214,21 +214,31 @@ func relinkOne(ctx context.Context, path string, gh *github.Client, opts Options
 			return res
 		}
 		if !exists {
-			res.Action, res.Reason = "skipped", "no matching repository on GitHub yet"
+			res.Action, res.Reason = "skipped", "no repository named "+target+" on GitHub"
 			return res
 		}
 		res.Public = !repo.Private
 		// Asked once the repository is known to exist.
-		rewritten, err := rewrittenOnGitHub(ctx, path, gh, opts.GitHubUser, target)
-		if errors.Is(err, github.ErrEmptyRepository) {
+		match, err := compareWithGitHub(ctx, path, gh, opts.GitHubUser, target)
+		switch {
+		case errors.Is(err, github.ErrEmptyRepository):
 			// Repointing at it would be worse than useless: the next push
 			// would fill it with this clone's history, addresses and all,
 			// whatever the migration meant to publish.
 			res.Action = "skipped"
 			res.Reason = "the GitHub repository is empty; run migrate again to finish it"
 			return res
+		case match == matchDifferent:
+			// A name is not an identity. Two repositories can want the same
+			// one -- your own implementation of an exercise and the group's --
+			// and repointing at the wrong one, or worse adopting it, would
+			// swap this clone's project for another.
+			res.Action = "skipped"
+			res.Reason = "github.com/" + opts.GitHubUser + "/" + target + " does not match this clone: " +
+				"a different repository, or one of the two has commits the other lacks (pull first)"
+			return res
 		}
-		res.Redacted = rewritten
+		res.Redacted = match == matchRewritten
 	}
 
 	mode := opts.modeFor(path)
@@ -321,61 +331,111 @@ func relinkOne(ctx context.Context, path string, gh *github.Client, opts Options
 	return res
 }
 
-// rewrittenOnGitHub reports whether GitHub holds a rewritten copy of this
-// clone's history rather than the history itself.
+// githubMatch is how the repository on GitHub relates to a clone.
+type githubMatch int
+
+const (
+	// matchSame: GitHub holds this clone's own commits.
+	matchSame githubMatch = iota
+	// matchRewritten: GitHub holds the same files under rewritten commits --
+	// this project, redacted.
+	matchRewritten
+	// matchDifferent: neither the commits nor the files match. Another
+	// project that has the name, or a clone that has drifted from what was
+	// migrated.
+	matchDifferent
+)
+
+// compareWithGitHub works out how the repository on GitHub relates to this
+// clone, by its commits first and its files second.
 //
-// The question is put to the commits, not to the addresses in them. Every tip
-// the clone remembers from Gitea -- its origin/* branches -- was on Gitea, so
-// a verbatim migration carried it to GitHub under the same hash and a
-// rewriting one carried none of them. The addresses cannot answer this on
-// their own: a solo project redacted with its owner's address kept comes out
-// with every commit rewritten and not one address in the redacted shape.
+// The commits are asked about first. Every tip the clone remembers from Gitea
+// -- its origin/* branches -- was on Gitea, so a verbatim migration carried it
+// to GitHub under the same hash. One found is enough: a branch deleted from
+// Gitea before the migration is missing from GitHub for a reason that has
+// nothing to do with redaction, and must not outvote one that is there. HEAD
+// is not asked about, since it may hold commits that never left this machine.
 //
-// Every tip is asked about, and one found is enough to say "not rewritten".
-// A branch deleted from Gitea before the migration is missing from GitHub for
-// a reason that has nothing to do with redaction, and must not outvote one
-// that is there. HEAD is not asked about: it may hold commits that never left
-// this machine.
+// When none is found, the history was rewritten -- or this is not the same
+// project at all, and the name is all the two have in common. Redaction
+// changes who made each commit and never what it contains, so the files tell
+// the two apart: the same branch holding the same tree on both sides is this
+// project, rewritten. Anything else is reported as different rather than
+// guessed at, because what follows from "rewritten" is an adoption, and
+// adopting another project's history would replace this clone's files.
 //
-// The addresses remain the answer when the commits cannot give one -- a clone
-// that remembers no branch from Gitea, or a GitHub that will not say. Getting
-// it wrong in that direction offers an ordinary repoint that git then
-// refuses, rather than refusing to repoint anything at all.
-func rewrittenOnGitHub(ctx context.Context, path string, gh *github.Client, owner, name string) (bool, error) {
-	tips, err := gitOutput(ctx, path, "for-each-ref", "--format=%(objectname)", "refs/remotes/origin")
-	if err == nil {
-		seen := map[string]bool{}
-		asked := 0
-		for _, sha := range strings.Fields(tips) {
-			// origin/HEAD repeats a branch's tip; and a handful is plenty,
-			// since a verbatim copy answers yes to the first one.
-			if seen[sha] || asked == maxTipsAsked {
-				continue
-			}
-			seen[sha] = true
-			asked++
-			found, err := gh.HasCommit(ctx, owner, name, sha)
-			if errors.Is(err, github.ErrEmptyRepository) {
-				return false, err
-			}
-			if err != nil {
-				asked = 0
-				break
-			}
-			if found {
-				return false, nil
-			}
-		}
-		if asked > 0 {
-			return true, nil
+// The addresses are the answer of last resort, when the clone remembers no
+// branch from Gitea or GitHub will not say. Getting it wrong in that
+// direction offers an ordinary repoint that git then refuses, rather than
+// refusing to repoint anything at all.
+func compareWithGitHub(ctx context.Context, path string, gh *github.Client, owner, name string) (githubMatch, error) {
+	branches, err := originBranches(ctx, path)
+	if err == nil && len(branches) > 0 {
+		verdict, err := compareBranches(ctx, branches, gh, owner, name)
+		if err == nil || errors.Is(err, github.ErrEmptyRepository) {
+			return verdict, err
 		}
 	}
 
 	addrs, err := gh.TipAuthors(ctx, owner, name)
-	if err != nil {
-		return false, nil
+	if err == nil && anyRedacted(addrs) {
+		return matchRewritten, nil
 	}
-	return anyRedacted(addrs), nil
+	return matchSame, nil
+}
+
+// originBranch is one branch the clone remembers from Gitea.
+type originBranch struct {
+	name, commit, tree string
+}
+
+// originBranches lists the clone's origin/* branches, at most maxTipsAsked of
+// them, each commit once.
+func originBranches(ctx context.Context, path string) ([]originBranch, error) {
+	out, err := gitOutput(ctx, path, "for-each-ref",
+		"--format=%(refname:lstrip=3) %(objectname) %(tree)", "refs/remotes/origin")
+	if err != nil {
+		return nil, err
+	}
+	var branches []originBranch
+	seen := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		// origin/HEAD only repeats a branch.
+		if len(fields) != 3 || fields[0] == "HEAD" || seen[fields[1]] {
+			continue
+		}
+		seen[fields[1]] = true
+		branches = append(branches, originBranch{name: fields[0], commit: fields[1], tree: fields[2]})
+		if len(branches) == maxTipsAsked {
+			break
+		}
+	}
+	return branches, nil
+}
+
+// compareBranches asks GitHub about each branch: its commit first, and, only
+// once no commit has been found anywhere, its files.
+func compareBranches(ctx context.Context, branches []originBranch, gh *github.Client, owner, name string) (githubMatch, error) {
+	for _, b := range branches {
+		found, err := gh.HasCommit(ctx, owner, name, b.commit)
+		if err != nil {
+			return matchSame, err
+		}
+		if found {
+			return matchSame, nil
+		}
+	}
+	for _, b := range branches {
+		tree, found, err := gh.BranchTree(ctx, owner, name, b.name)
+		if err != nil {
+			return matchSame, err
+		}
+		if found && tree == b.tree {
+			return matchRewritten, nil
+		}
+	}
+	return matchDifferent, nil
 }
 
 // maxTipsAsked bounds the calls one clone can cost when nothing is found.
