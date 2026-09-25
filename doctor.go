@@ -54,6 +54,9 @@ func cmdDoctor(ctx context.Context, args []string) error {
 		failures++
 		fmt.Printf("  %-12s FAIL  %s\n", check, alignContinuation(fmt.Sprintf(format, args...)))
 	}
+	warn := func(check, format string, args ...any) {
+		fmt.Printf("  %-12s WARN  %s\n", check, alignContinuation(fmt.Sprintf(format, args...)))
+	}
 	hint := func(format string, args ...any) {
 		fmt.Printf("               fix   %s\n", alignContinuation(fmt.Sprintf(format, args...)))
 	}
@@ -124,10 +127,12 @@ func cmdDoctor(ctx context.Context, args []string) error {
 		fail("credential", "%v", err)
 	} else {
 		ok("credential", "via %s", ghCred.Source)
-		if login, err := github.New(ghCred.Token).Login(ctx); err != nil {
+		gh := github.New(ghCred.Token)
+		if login, err := gh.Login(ctx); err != nil {
 			fail("identity", "%v", err)
 		} else {
 			ok("identity", "%s", login)
+			checkGitHubScopes(ctx, gh, ghCred.Source, ok, warn, fail, hint)
 		}
 	}
 
@@ -205,3 +210,55 @@ func cmdList(ctx context.Context, args []string) error {
 }
 
 // cmdMigrate is the main event.
+
+// checkGitHubScopes reports whether the GitHub token can do what a migration
+// asks of it. Finding out from a failed push, twenty repositories in, is the
+// thing doctor exists to prevent.
+//
+// Two scopes matter. repo creates private repositories and pushes to them;
+// public_repo alone manages only public ones. workflow is needed to push any
+// repository that contains GitHub Actions workflows -- without it GitHub
+// refuses the push outright, whatever else the token can do.
+func checkGitHubScopes(ctx context.Context, gh *github.Client, source string,
+	ok, warn, fail func(string, string, ...any), hint func(string, ...any)) {
+
+	scopes, reported, err := gh.TokenScopes(ctx)
+	switch {
+	case err != nil:
+		fail("scopes", "%v", err)
+		return
+	case !reported:
+		ok("scopes", "fine-grained token: GitHub does not list its permissions.\n"+
+			"It needs Administration, Contents and Workflows, all with write access.")
+		return
+	}
+	has := map[string]bool{}
+	for _, s := range scopes {
+		has[s] = true
+	}
+	fix := "create a token with the repo and workflow scopes"
+	if source == "gh CLI" {
+		fix = "gh auth refresh -s repo,workflow"
+	}
+
+	listed := strings.Join(scopes, ", ")
+	if listed == "" {
+		listed = "no scopes"
+	}
+	switch {
+	case has["repo"]:
+		ok("scopes", "%s", listed)
+	case has["public_repo"]:
+		warn("scopes", "%s: private repositories can NOT be created or pushed to", listed)
+		hint("%s", fix)
+	default:
+		fail("scopes", "%s: without repo or public_repo, repositories can NOT be created", listed)
+		hint("%s", fix)
+		return
+	}
+	if !has["workflow"] {
+		warn("workflow", "scope missing: a repository with GitHub Actions workflows\n"+
+			"(.github/workflows) can NOT be pushed")
+		hint("%s", fix)
+	}
+}
