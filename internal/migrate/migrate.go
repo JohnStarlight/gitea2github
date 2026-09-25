@@ -50,6 +50,13 @@ type Result struct {
 	Status        Status
 	Reason        string        // why it was skipped, or what failed
 	Took          time.Duration // wall-clock time, useful for spotting the slow ones
+
+	// Resume marks a repository already on GitHub with nothing in it: the
+	// remains of a run that created it and was interrupted before its push
+	// landed. It is pushed into rather than created, and rather than being
+	// reported as present -- which would leave it empty however many times
+	// the migration was run again.
+	Resume bool
 }
 
 // Options configures one migration run.
@@ -121,6 +128,10 @@ type Options struct {
 	// chosen.
 	RedactOnly map[string]bool
 
+	// client replaces the GitHub client Run would build, so tests can answer
+	// its questions without an account behind them.
+	client *github.Client
+
 	// WorkDir holds the temporary mirror clones. When empty a directory under
 	// the system temp location is created and removed afterwards.
 	WorkDir string
@@ -158,7 +169,10 @@ func Run(ctx context.Context, repos []gitea.Repo, opts Options) []Result {
 		defer os.RemoveAll(workDir)
 	}
 
-	gh := github.New(opts.GitHubTok)
+	gh := opts.client
+	if gh == nil {
+		gh = github.New(opts.GitHubTok)
+	}
 	gh.Log = opts.Log
 
 	// Results are written by index, so each worker owns exactly one slot and no
@@ -234,19 +248,33 @@ func migrateOne(ctx context.Context, repo gitea.Repo, gh *github.Client, opts Op
 	}
 
 	// --- Already there? ----------------------------------------------------
-	exists, err := gh.Exists(ctx, opts.GitHubUser, target)
+	existing, exists, err := gh.Lookup(ctx, opts.GitHubUser, target)
 	if err != nil {
 		return finish(StatusFailed, fmt.Sprintf("checking GitHub: %v", err))
 	}
 	if exists {
-		return finish(StatusExists, "already on GitHub, left untouched")
+		empty, err := gh.IsEmpty(ctx, opts.GitHubUser, target)
+		if err != nil {
+			return finish(StatusFailed, fmt.Sprintf("checking GitHub: %v", err))
+		}
+		if !empty {
+			return finish(StatusExists, "already on GitHub, left untouched")
+		}
+		res.Resume = true
+		res.Private = resumeIsPrivate(repo, existing.Private, opts.Visibility, opts.VisibilityOverride)
 	}
 
 	if opts.DryRun {
-		if opts.Redacts(repo.FullName) {
-			return finish(StatusPlanned, "would clone, redact emails, create and push")
+		steps := "would clone, create and push"
+		switch {
+		case res.Resume && opts.Redacts(repo.FullName):
+			steps = "empty on GitHub; would clone, redact emails and push into it"
+		case res.Resume:
+			steps = "empty on GitHub; would clone and push into it"
+		case opts.Redacts(repo.FullName):
+			steps = "would clone, redact emails, create and push"
 		}
-		return finish(StatusPlanned, "would clone, create and push")
+		return finish(StatusPlanned, steps)
 	}
 
 	// --- Mirror clone ------------------------------------------------------
@@ -285,19 +313,36 @@ func migrateOne(ctx context.Context, repo gitea.Repo, gh *github.Client, opts Op
 		pushFrom = rewritten
 	}
 
-	// --- Create on GitHub --------------------------------------------------
-	opts.Log("creating github.com/%s/%s", opts.GitHubUser, target)
-	created, err := gh.CreateRepo(ctx, target, repo.Description, res.Private)
-	if err != nil {
-		return finish(StatusFailed, fmt.Sprintf("creating GitHub repo: %v", err))
+	// --- Create on GitHub, or take up the empty one ------------------------
+	pushTo := existing.CloneURL
+	if res.Resume {
+		// Set before anything is pushed, so that what arrives is never
+		// visible to anyone it was not meant for, even briefly.
+		if existing.Private != res.Private {
+			opts.Log("making github.com/%s/%s %s", opts.GitHubUser, target, visibilityName(res.Private))
+			if err := gh.SetPrivate(ctx, opts.GitHubUser, target, res.Private); err != nil {
+				return finish(StatusFailed, fmt.Sprintf("setting visibility: %v", err))
+			}
+		}
+	} else {
+		opts.Log("creating github.com/%s/%s", opts.GitHubUser, target)
+		created, err := gh.CreateRepo(ctx, target, repo.Description, res.Private)
+		if err != nil {
+			return finish(StatusFailed, fmt.Sprintf("creating GitHub repo: %v", err))
+		}
+		pushTo = created.CloneURL
 	}
 
 	// --- Mirror push -------------------------------------------------------
 	opts.Log("pushing %s", repo.FullName)
 	// "x-access-token" is the username GitHub expects when the password being
 	// offered is a personal access token.
+	//
+	// --atomic makes the push all or nothing. Without it an interrupted push
+	// can land some branches and not others, leaving a repository that is
+	// neither empty -- so the next run would not resume it -- nor complete.
 	if out, err := runGitAs(ctx, pushFrom, "x-access-token", opts.GitHubTok,
-		"push", "--mirror", created.CloneURL); err != nil {
+		"push", "--mirror", "--atomic", pushTo); err != nil {
 		return finish(StatusFailed, fmt.Sprintf("push failed: %v: %s", err, out))
 	}
 
@@ -512,6 +557,34 @@ const (
 	VisibilityPrivate VisibilityMode = "private"
 	VisibilityPublic  VisibilityMode = "public"
 )
+
+// resumeIsPrivate decides the visibility of an empty repository an earlier
+// run left on GitHub, which is about to be filled.
+//
+// Two answers already exist -- how the repository is on Gitea, and how the
+// empty one is on GitHub -- and when they disagree neither can be assumed to
+// be the one meant: the empty one may have been made by hand, public on
+// purpose or by mistake. Private is the answer that exposes nothing it should
+// not, and anything the user chose explicitly beats it.
+func resumeIsPrivate(source gitea.Repo, existingPrivate bool, mode VisibilityMode, override map[string]bool) bool {
+	if private, ok := override[source.FullName]; ok {
+		return private
+	}
+	switch mode {
+	case VisibilityPrivate:
+		return true
+	case VisibilityPublic:
+		return false
+	}
+	return source.Private || existingPrivate
+}
+
+func visibilityName(private bool) string {
+	if private {
+		return "private"
+	}
+	return "public"
+}
 
 // destinationIsPrivate decides the visibility of the repository about to be
 // created on GitHub.

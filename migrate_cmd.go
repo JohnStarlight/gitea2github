@@ -454,6 +454,7 @@ func buildRows(repos []gitea.Repo, probe []migrate.Result, giteaUser string,
 			Archived:      repo.Archived,
 			Foreign:       !repo.OwnedBy(giteaUser),
 			Target:        targets[repo.FullName],
+			Resume:        res.Resume,
 		}
 		// Marked as renamed when the destination differs from the repository's
 		// own name, so the row says where it will land rather than leaving
