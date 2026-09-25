@@ -34,10 +34,14 @@ type Credential struct {
 	Source   string
 }
 
+// PlaceholderUser is the username offered alongside GITEA_TOKEN when
+// GITEA_USER is not set. Gitea ignores it; it only fills the field.
+const PlaceholderUser = "token"
+
 // Gitea resolves the Gitea credential for the given host.
 //
 // Resolution order:
-//  1. GITEA_TOKEN environment variable (username defaults to GITEA_USER).
+//  1. GITEA_TOKEN environment variable (username from GITEA_USER, optional).
 //  2. The git credential helper chain for that host. This is the same store
 //     `git push` reads, so if the user can already push to Gitea from the
 //     shell, this just works with no extra setup.
@@ -53,8 +57,9 @@ func Gitea(host string) (Credential, error) {
 		if user == "" {
 			// Gitea accepts any non-empty username when the password is a
 			// personal access token, but git's credential protocol and basic
-			// auth both want *something* in the field.
-			user = "token"
+			// auth both want *something* in the field. It is not who the user
+			// is: that is asked of the server, see gitea.Client.Login.
+			user = PlaceholderUser
 		}
 		return Credential{Username: user, Token: tok, Source: "GITEA_TOKEN env"}, nil
 	}

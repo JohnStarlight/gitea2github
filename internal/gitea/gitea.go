@@ -120,6 +120,29 @@ func (c *Client) Version(ctx context.Context) (string, error) {
 	return out.Version, nil
 }
 
+// Login returns the username the token belongs to.
+//
+// Asked of the server rather than taken from wherever the token was stored,
+// because the stored username is only ever a guess: GITEA_TOKEN arrives with
+// none at all, and a credential helper holds whatever was typed next to the
+// token -- an email address, say. Gitea itself ignores that name when the
+// password is a token, so nothing checks it, and every repository would
+// quietly count as somebody else's. The token knows exactly whose it is.
+//
+// Needs read:user, which listing repositories needs anyway.
+func (c *Client) Login(ctx context.Context) (string, error) {
+	var out struct {
+		Login string `json:"login"`
+	}
+	if err := c.get(ctx, "/user", &out); err != nil {
+		return "", err
+	}
+	if out.Login == "" {
+		return "", fmt.Errorf("gitea answered /user without a login")
+	}
+	return out.Login, nil
+}
+
 // ListRepos returns every repository visible to the authenticated user,
 // following pagination until a short page tells us we have reached the end.
 //
