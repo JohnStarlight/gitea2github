@@ -30,6 +30,8 @@ import (
 // Result records what happened to one local clone.
 type Result struct {
 	Path   string // directory of the working copy
+	Source string // Gitea full name its origin points at, e.g. "teammate/quadchecker"
+	Target string // name looked for on GitHub
 	OldURL string // the Gitea remote we found
 	NewURL string // the GitHub remote we set, if any
 	Action string // "relinked", "skipped", "planned" or "failed"
@@ -215,6 +217,7 @@ func relinkOne(ctx context.Context, path string, gh *github.Client, opts Options
 	}
 
 	target := opts.targetFor(origin)
+	res.Source, res.Target = GiteaFullName(origin), target
 	res.NewURL = fmt.Sprintf("https://github.com/%s/%s.git", opts.GitHubUser, target)
 
 	if opts.Verify && gh != nil {
@@ -245,7 +248,8 @@ func relinkOne(ctx context.Context, path string, gh *github.Client, opts Options
 			// swap this clone's project for another.
 			res.Action = "skipped"
 			res.Reason = "github.com/" + opts.GitHubUser + "/" + target + " does not match this clone: " +
-				"a different repository, or one of the two has commits the other lacks (pull first)"
+				"its commits and its files are different. It may be another project, " +
+				"or this clone may be behind Gitea"
 			return res
 		}
 		res.Redacted = match == matchRewritten

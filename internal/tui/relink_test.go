@@ -738,3 +738,87 @@ func TestBulkSettingSkipsWhatItMayNotChange(t *testing.T) {
 		t.Errorf("A did not say what it held back: %q", m.note)
 	}
 }
+
+// namedScreen is one clone whose repository took another name on GitHub --
+// typed during the migration, and recorded nowhere since.
+func namedScreen(renamer Renamer) *RelinkModel {
+	clones := []Clone{{
+		Path: "/home/me/Git/quadchecker", Display: "~/Git/quadchecker",
+		Source: "teammate/quadchecker", Target: "quadchecker",
+		Blocked: "no repository named quadchecker on GitHub",
+	}}
+	m := NewRelinkModel(clones, relink.ModeGitHub, "gitea").WithRenamer(renamer)
+	m.SetSize(110, 20)
+	return m
+}
+
+// TestNameCanBeGivenOnTheScreen is the point of r: the clone is looked for
+// again under the name typed, and, found, joins the run.
+func TestNameCanBeGivenOnTheScreen(t *testing.T) {
+	var asked []string
+	m := namedScreen(func(c Clone, name string) (Clone, error) {
+		asked = append(asked, c.Source+"="+name)
+		c.Target, c.Blocked = name, ""
+		return c, nil
+	})
+
+	m.Update(Key{Kind: KeyRune, Rune: 'r'})
+	typePath(m, "-team") // the box opens on the name looked for, so this appends
+	if frame := stripANSI(m.View("x")); !strings.Contains(frame, "name on GitHub: quadchecker-team") {
+		t.Errorf("the name being typed is not shown:\n%s", frame)
+	}
+	m.Update(Key{Kind: KeyEnter})
+
+	if len(asked) != 0 || !m.Working() {
+		t.Fatal("the lookup should be owed to Work, so the screen can say what it is doing first")
+	}
+	if frame := stripANSI(m.View("x")); !strings.Contains(frame, "looking for quadchecker-team") {
+		t.Errorf("the frame drawn before the lookup does not say what it is doing:\n%s", frame)
+	}
+	m.Work()
+
+	if len(asked) != 1 || asked[0] != "teammate/quadchecker=quadchecker-team" {
+		t.Errorf("looked for %v", asked)
+	}
+	if only, _ := m.Chosen(); !only["/home/me/Git/quadchecker"] {
+		t.Error("the clone found under its new name was not selected")
+	}
+	if got := m.Renames(); got["teammate/quadchecker"] != "quadchecker-team" {
+		t.Errorf("Renames() = %v", got)
+	}
+}
+
+// TestNameNotFoundLeavesTheRowBlocked: a wrong name costs a message, and is
+// not recorded as a name to use.
+func TestNameNotFoundLeavesTheRowBlocked(t *testing.T) {
+	m := namedScreen(func(c Clone, name string) (Clone, error) {
+		c.Target, c.Blocked = name, "no repository named "+name+" on GitHub"
+		return c, nil
+	})
+	m.Update(Key{Kind: KeyRune, Rune: 'r'})
+	typePath(m, "-oops")
+	m.Update(Key{Kind: KeyEnter})
+	m.Work()
+
+	if only, _ := m.Chosen(); len(only) != 0 {
+		t.Errorf("a clone still not found was selected: %v", only)
+	}
+	if len(m.Renames()) != 0 {
+		t.Errorf("a name GitHub does not have was recorded: %v", m.Renames())
+	}
+}
+
+// TestEscapeKeepsTheName: changing one's mind costs nothing.
+func TestEscapeKeepsTheName(t *testing.T) {
+	called := false
+	m := namedScreen(func(c Clone, name string) (Clone, error) { called = true; return c, nil })
+	m.Update(Key{Kind: KeyRune, Rune: 'r'})
+	typePath(m, "-team")
+	m.Update(Key{Kind: KeyEscape})
+	if m.Working() || called {
+		t.Error("escape still looked the name up")
+	}
+	if m.Done() {
+		t.Error("escape in the name box left the screen")
+	}
+}
