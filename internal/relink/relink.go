@@ -13,6 +13,7 @@ package relink
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -112,6 +113,10 @@ type Options struct {
 	Verify bool
 
 	Log func(format string, args ...any)
+
+	// client replaces the GitHub client Verify would build, so tests can
+	// answer its questions without an account behind them.
+	client *github.Client
 }
 
 // Run scans Root for git working copies whose origin lives on GiteaHost and
@@ -131,7 +136,10 @@ func Run(ctx context.Context, opts Options) ([]Result, error) {
 
 	var gh *github.Client
 	if opts.Verify {
-		gh = github.New(opts.GitHubTok)
+		gh = opts.client
+		if gh == nil {
+			gh = github.New(opts.GitHubTok)
+		}
 	}
 
 	if opts.Concurrency < 1 {
@@ -210,13 +218,17 @@ func relinkOne(ctx context.Context, path string, gh *github.Client, opts Options
 			return res
 		}
 		res.Public = !repo.Private
-		// Asked once the repository is known to exist. A failure here is not
-		// fatal: the worst case is offering the ordinary modes for a redacted
-		// repository, which git will then refuse, rather than refusing to
-		// repoint anything at all.
-		if addrs, err := gh.TipAuthors(ctx, opts.GitHubUser, target); err == nil {
-			res.Redacted = anyRedacted(addrs)
+		// Asked once the repository is known to exist.
+		rewritten, err := rewrittenOnGitHub(ctx, path, gh, opts.GitHubUser, target)
+		if errors.Is(err, github.ErrEmptyRepository) {
+			// Repointing at it would be worse than useless: the next push
+			// would fill it with this clone's history, addresses and all,
+			// whatever the migration meant to publish.
+			res.Action = "skipped"
+			res.Reason = "the GitHub repository is empty; run migrate again to finish it"
+			return res
 		}
+		res.Redacted = rewritten
 	}
 
 	mode := opts.modeFor(path)
@@ -308,6 +320,66 @@ func relinkOne(ctx context.Context, path string, gh *github.Client, opts Options
 
 	return res
 }
+
+// rewrittenOnGitHub reports whether GitHub holds a rewritten copy of this
+// clone's history rather than the history itself.
+//
+// The question is put to the commits, not to the addresses in them. Every tip
+// the clone remembers from Gitea -- its origin/* branches -- was on Gitea, so
+// a verbatim migration carried it to GitHub under the same hash and a
+// rewriting one carried none of them. The addresses cannot answer this on
+// their own: a solo project redacted with its owner's address kept comes out
+// with every commit rewritten and not one address in the redacted shape.
+//
+// Every tip is asked about, and one found is enough to say "not rewritten".
+// A branch deleted from Gitea before the migration is missing from GitHub for
+// a reason that has nothing to do with redaction, and must not outvote one
+// that is there. HEAD is not asked about: it may hold commits that never left
+// this machine.
+//
+// The addresses remain the answer when the commits cannot give one -- a clone
+// that remembers no branch from Gitea, or a GitHub that will not say. Getting
+// it wrong in that direction offers an ordinary repoint that git then
+// refuses, rather than refusing to repoint anything at all.
+func rewrittenOnGitHub(ctx context.Context, path string, gh *github.Client, owner, name string) (bool, error) {
+	tips, err := gitOutput(ctx, path, "for-each-ref", "--format=%(objectname)", "refs/remotes/origin")
+	if err == nil {
+		seen := map[string]bool{}
+		asked := 0
+		for _, sha := range strings.Fields(tips) {
+			// origin/HEAD repeats a branch's tip; and a handful is plenty,
+			// since a verbatim copy answers yes to the first one.
+			if seen[sha] || asked == maxTipsAsked {
+				continue
+			}
+			seen[sha] = true
+			asked++
+			found, err := gh.HasCommit(ctx, owner, name, sha)
+			if errors.Is(err, github.ErrEmptyRepository) {
+				return false, err
+			}
+			if err != nil {
+				asked = 0
+				break
+			}
+			if found {
+				return false, nil
+			}
+		}
+		if asked > 0 {
+			return true, nil
+		}
+	}
+
+	addrs, err := gh.TipAuthors(ctx, owner, name)
+	if err != nil {
+		return false, nil
+	}
+	return anyRedacted(addrs), nil
+}
+
+// maxTipsAsked bounds the calls one clone can cost when nothing is found.
+const maxTipsAsked = 10
 
 // anyRedacted reports whether these addresses came from a redacting rewrite.
 //
