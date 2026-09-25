@@ -323,9 +323,12 @@ being a clone of the Gitea repository. `both` and `gitea` are greyed out, becaus
 The history is fetched from GitHub rather than reproduced locally, so the
 result matches by construction rather than by getting a rewrite exactly right.
 Your working tree is untouched — redaction changes who made a commit, not what
-it contains. A clone with uncommitted changes, with commits that never reached
-Gitea, or on a branch whose state cannot be compared at all, is refused until
-that is dealt with: once it belongs to GitHub it can never push to Gitea again.
+it contains, and that is checked rather than assumed: if GitHub's files differ
+from the clone's, because it is another project or the clone is behind Gitea,
+nothing is changed. A clone with uncommitted changes, with commits that never
+reached Gitea, or on a branch whose state cannot be compared at all, is refused
+until that is dealt with: once it belongs to GitHub it can never push to Gitea
+again.
 
 A migration that redacted anything says so before offering, and offers with the
 answer already yes:

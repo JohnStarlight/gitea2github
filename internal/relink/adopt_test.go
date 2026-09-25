@@ -274,3 +274,52 @@ func TestRemoteTrackingBranchIsEnoughWithoutAnUpstream(t *testing.T) {
 		t.Errorf("an unpushed commit went unnoticed without an upstream: %q", risk.Reason)
 	}
 }
+
+// TestAdoptRefusesDifferentFiles is the last line of defence. However the
+// clone came to be matched with a GitHub repository, adopting resets it onto
+// GitHub's commits, and that is only harmless when the files are the same.
+// When they differ -- another project, or a clone behind what was migrated --
+// nothing may change.
+func TestAdoptRefusesDifferentFiles(t *testing.T) {
+	work, gitea, github := scenario(t)
+	ctx := context.Background()
+
+	other := filepath.Join(filepath.Dir(work), "other")
+	for _, args := range [][]string{
+		{"init", "-q", other},
+		{"-C", other, "config", "user.email", "x@example.com"},
+		{"-C", other, "config", "user.name", "X"},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(other, "a.txt"), []byte("somebody else's\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"-C", other, "add", "."},
+		{"-C", other, "commit", "-qm", "unrelated"},
+		{"-C", other, "push", "-q", "--force", github, "HEAD:main"},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+
+	before := head(t, work)
+	err := Adopt(ctx, work, github, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "different files") {
+		t.Fatalf("Adopt = %v, want a refusal over different files", err)
+	}
+	if head(t, work) != before {
+		t.Error("HEAD moved although the adoption was refused")
+	}
+	if got := remoteURL(t, work, "origin"); got != gitea {
+		t.Errorf("origin is %q after a refused adoption, want it left at %q", got, gitea)
+	}
+	data, _ := os.ReadFile(filepath.Join(work, "a.txt"))
+	if string(data) != "one\n" {
+		t.Errorf("a.txt now reads %q", data)
+	}
+}

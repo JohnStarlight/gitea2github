@@ -98,6 +98,21 @@ func Adopt(ctx context.Context, path, githubURL string, env []string, log func(s
 	if out, err := gitWithEnv(ctx, path, env, "fetch", githubURL, branch); err != nil {
 		return fmt.Errorf("fetching from GitHub: %v: %s", err, out)
 	}
+	// The last check before the one step that cannot be taken back. A
+	// rewritten copy of this project has exactly the files checked out here,
+	// since redaction changes who made each commit and never what it
+	// contains; anything else is another project that shares the name, or a
+	// clone that is behind what was migrated. Either way the reset would
+	// replace files, which adopting is promised never to do.
+	here, errHere := gitOutput(ctx, path, "rev-parse", "HEAD^{tree}")
+	there, errThere := gitOutput(ctx, path, "rev-parse", "FETCH_HEAD^{tree}")
+	if errHere != nil || errThere != nil {
+		return fmt.Errorf("comparing with GitHub's %s: could not read both trees", branch)
+	}
+	if here != there {
+		return fmt.Errorf("GitHub's %s has different files from this clone -- a different "+
+			"repository, or this clone is behind Gitea (pull first); nothing was changed", branch)
+	}
 	if out, err := gitOutput(ctx, path, "reset", "--hard", "FETCH_HEAD"); err != nil {
 		return fmt.Errorf("moving onto the rewritten history: %v: %s", err, out)
 	}
