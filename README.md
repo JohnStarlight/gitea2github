@@ -274,7 +274,9 @@ rather than which remote gets moved where. The destination is chosen per clone:
 a folder of coursework rarely wants one answer for all of it — the group
 project you still push to Gitea for audits is not the one you are done with.
 `A` gives every clone on screen the destination of the one under the cursor,
-and `d` points the screen at another directory without leaving it.
+and `d` points the screen at another directory without leaving it. `r` gives a
+clone the name its repository took on GitHub, when that is not its own name —
+say, one you typed during the migration — and looks for it there.
 
 **`both` needs the GitHub repository to be private.** It carries whatever you
 commit to GitHub on every push, addresses and all — contained while the
@@ -465,9 +467,10 @@ selection screen replaces it with anything you like:
 pointed at `quadchecker-teammate` and yours at `quadchecker`. The repointing
 offered at the end of a migration knows every name, including the ones you
 typed; `relink` run later works out the automatic ones again from Gitea, but
-cannot know a name you typed. Whatever name it arrives at, a GitHub repository
-whose commits and files both differ from the clone's is left alone rather than
-repointed at.
+cannot know a name you typed: give it with `r` on its screen, or with
+`--name teammate/quadchecker=quadchecker-team`. Whatever name it arrives at, a
+GitHub repository whose commits and files both differ from the clone's is left
+alone rather than repointed at.
 
 ## Without the interface
 
@@ -545,6 +548,7 @@ gitea2github relink --dry-run ~/Git       # plan only
 | `--push-to` | `github` | Where clones push, for all of them |
 | `--keep-as` | `gitea` | New name for the old remote (`--push-to=github` only) |
 | `--verify` | `true` | Confirm the GitHub repository exists first |
+| `--name` | none | The name a repository took on GitHub, as `owner/repo=name` (repeatable) |
 
 | `--push-to` | `origin` fetches | `git push` goes to | Extra remotes |
 | --- | --- | --- | --- |

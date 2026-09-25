@@ -43,6 +43,12 @@ type Clone struct {
 	// would be lost. Empty when there is none.
 	Risk string
 
+	// Source is the Gitea repository this is a copy of, and Target the name
+	// looked for on GitHub. Target can be changed on the screen: a name typed
+	// during the migration is recorded nowhere, so only the person who typed
+	// it can say it again.
+	Source, Target string
+
 	// Include is whether this clone is in the run, and Mode is where it will
 	// push afterwards.
 	Include bool
@@ -74,6 +80,16 @@ func (c Clone) allows(mode string) (bool, string) {
 // test with a fake.
 type Rescan func(root string) ([]Clone, error)
 
+// Renamer looks for a clone's repository on GitHub under another name, and
+// returns the row as it would be with that name. Supplied by the caller, as
+// Rescan is.
+type Renamer func(c Clone, name string) (Clone, error)
+
+// pendingRename is a name typed for a clone and not yet looked for.
+type pendingRename struct {
+	path, name string
+}
+
 // RelinkModel is the state of the repointing screen.
 type RelinkModel struct {
 	clones  []Clone
@@ -88,6 +104,15 @@ type RelinkModel struct {
 
 	editingRoot bool
 	scanning    string // non-empty while a scan is owed for this path
+
+	// renamer, when set, lets r give a clone the name its repository took on
+	// GitHub. renames records the names that were found, keyed by the Gitea
+	// repository in lower case, for the run that follows the screen.
+	renamer     Renamer
+	editingName bool
+	newName     string
+	renaming    *pendingRename
+	renames     map[string]string
 
 	// list holds the cursor and the search box, shared with the other screen.
 	list
@@ -133,11 +158,22 @@ func (m *RelinkModel) WithRoot(root string, rescan Rescan) *RelinkModel {
 	return m
 }
 
+// WithRenamer lets r look for a clone's repository under another name.
+func (m *RelinkModel) WithRenamer(r Renamer) *RelinkModel {
+	m.renamer = r
+	return m
+}
+
+// Renames is every name given on the screen that GitHub had, keyed by the
+// Gitea repository in lower case.
+func (m *RelinkModel) Renames() map[string]string { return m.renames }
+
 // Root is the directory the chosen clones were found under.
 func (m *RelinkModel) Root() string { return m.root }
 
-// Working reports that a directory has been given and not yet scanned.
-func (m *RelinkModel) Working() bool { return m.scanning != "" }
+// Working reports that a directory or a name has been given and not yet
+// looked at.
+func (m *RelinkModel) Working() bool { return m.scanning != "" || m.renaming != nil }
 
 // Work performs the scan the last keystroke asked for.
 //
@@ -146,6 +182,10 @@ func (m *RelinkModel) Working() bool { return m.scanning != "" }
 // about every clone it finds, which is long enough for a frozen screen to look
 // like a hung one.
 func (m *RelinkModel) Work() {
+	if m.renaming != nil {
+		m.workRename()
+		return
+	}
 	root := m.scanning
 	m.scanning = ""
 	if m.rescan == nil {
@@ -171,6 +211,44 @@ func (m *RelinkModel) Work() {
 	m.query, m.cursor = "", 0
 	if len(found) == 0 {
 		m.note = "no git working copies under " + root
+	}
+}
+
+// workRename looks for one clone's repository under the name typed for it.
+func (m *RelinkModel) workRename() {
+	pending := m.renaming
+	m.renaming = nil
+	i := -1
+	for j, c := range m.clones {
+		if c.Path == pending.path {
+			i = j
+		}
+	}
+	if i < 0 || m.renamer == nil {
+		return
+	}
+	found, err := m.renamer(m.clones[i], pending.name)
+	if err != nil {
+		m.note = "could not look for " + pending.name + ": " + err.Error()
+		return
+	}
+	// The row is replaced whole: with another repository behind it, every
+	// fact about it may have changed -- whether it exists, whether it is the
+	// same project, whether it was rewritten.
+	found.Include = found.Blocked == ""
+	if found.Mode == "" {
+		found.Mode = m.clones[i].Mode
+	}
+	if found.onlyGitHub() {
+		found.Mode = relink.ModeGitHub
+	}
+	m.clones[i] = found
+	if found.Blocked == "" {
+		if m.renames == nil {
+			m.renames = map[string]string{}
+		}
+		m.renames[strings.ToLower(found.Source)] = found.Target
+		m.note = m.clones[i].Display + ": found as " + found.Target
 	}
 }
 
@@ -268,6 +346,10 @@ func (m *RelinkModel) Update(k Key) {
 		m.updateRoot(k)
 		return
 	}
+	if m.editingName {
+		m.updateName(k)
+		return
+	}
 	if m.searching {
 		m.updateSearch(k)
 		return
@@ -327,6 +409,18 @@ func (m *RelinkModel) Update(k Key) {
 		}
 		m.editingRoot = true
 		m.newRoot = m.root
+	case 'r':
+		i := m.currentClone()
+		switch {
+		case m.renamer == nil:
+			m.note = "this screen cannot look for other names"
+		case i < 0:
+		case m.clones[i].Source == "":
+			m.note = "this is not a copy of a Gitea repository"
+		default:
+			m.editingName = true
+			m.newName = m.clones[i].Target
+		}
 	case 'a':
 		m.setAll(true)
 	case 'n':
@@ -360,6 +454,32 @@ func (m *RelinkModel) updateRoot(k Key) {
 		m.newRoot += " "
 	case KeyRune:
 		m.newRoot += string(k.Rune)
+	}
+}
+
+// updateName handles keys while the name box has focus.
+func (m *RelinkModel) updateName(k Key) {
+	switch k.Kind {
+	case KeyEnter:
+		m.editingName = false
+		i := m.currentClone()
+		typed := strings.TrimSpace(m.newName)
+		if i < 0 || typed == "" || typed == m.clones[i].Target {
+			return
+		}
+		// Recorded rather than looked for here, so the runner can draw the
+		// frame that says what is happening before the wait starts.
+		m.renaming = &pendingRename{path: m.clones[i].Path, name: typed}
+	case KeyEscape, KeyCtrlC:
+		m.editingName = false
+		m.newName = ""
+	case KeyBackspace:
+		if m.newName != "" {
+			_, size := lastRune(m.newName)
+			m.newName = m.newName[:len(m.newName)-size]
+		}
+	case KeyRune:
+		m.newName += string(k.Rune)
 	}
 }
 
@@ -758,10 +878,17 @@ func (m *RelinkModel) relinkFooter() string {
 	}
 
 	hint := dim(pickFitting(m.width,
-		"  space select   1/2/3 destination   A all   d directory   / search   enter repoint   q quit",
-		"  space   1/2/3 dest   A all   d dir   / search   enter go   q quit",
-		"  space   1/2/3 dest   d dir   enter go   q quit",
+		"  space select   1/2/3 destination   A all   r name   d directory   / search   enter repoint   q quit",
+		"  space   1/2/3 dest   A all   r name   d dir   / search   enter go   q quit",
+		"  space   1/2/3 dest   r name   d dir   enter go   q quit",
 		"  enter go   q quit"))
+	if m.editingName {
+		hint = fmt.Sprintf("  name on GitHub: %s%s%s   %s",
+			ansiReverse, m.newName+" ", ansiReset, dim("enter to look for it, esc to cancel"))
+	}
+	if m.renaming != nil {
+		hint = fmt.Sprintf("  %slooking for %s on GitHub...%s", ansiCyan, m.renaming.name, ansiReset)
+	}
 	if m.editingRoot {
 		hint = dim(truncate("  type a directory, enter to scan it, esc to keep this one", m.width))
 	}
