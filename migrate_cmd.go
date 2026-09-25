@@ -25,6 +25,8 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"os/exec"
+	"runtime"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -59,6 +61,8 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	localWork := fs.String("local-work", "include",
 		"work found in your copies that Gitea does not have: include it on GitHub, or skip it")
 	pushLocal := fs.Bool("push-local-work", false, "also send that work to Gitea")
+	allowFileEmails := fs.Bool("allow-emails-in-files", false,
+		"publish a redacted repository even though its files contain email addresses")
 	var keepEmails stringList
 	fs.Var(&keepEmails, "keep-email",
 		"an address of yours, rewritten to your GitHub no-reply instead of a hash (repeatable)")
@@ -270,6 +274,7 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		RedactOnly:            redactOnly,
 		Target:                targets,
 		RenameTo:              renames,
+		AllowEmailsInFiles:    *allowFileEmails,
 		Topics: func(ctx context.Context, r gitea.Repo) ([]string, error) {
 			return client.Topics(ctx, r.Owner.Login, r.Name)
 		},
@@ -369,6 +374,8 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	if mapper != nil {
 		fmt.Printf("%d distinct email address(es) replaced\n", mapper.Count())
 	}
+	printFileAddresses(results)
+	printLFS(results)
 	if failed := countStatus(results, migrate.StatusFailed); failed > 0 {
 		return fmt.Errorf("%d repositories failed to migrate", failed)
 	}
@@ -380,6 +387,14 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	if countStatus(results, migrate.StatusMigrated) > 0 {
 		offerRelink(ctx, prompt, expandHome(root), *giteaURL, ghLogin, ghCred.Token, *assumeYes,
 			redactedCount(results, options), relinkTargets(targets, results))
+	}
+
+	// Reported as an error so that a script notices, but only after the
+	// clones have been offered their repointing: the rest of the run
+	// succeeded, and held back is not failed.
+	if held := countStatus(results, migrate.StatusHeld); held > 0 {
+		return fmt.Errorf("%s held back because of email addresses in files; see above",
+			count(held, "repository was", "repositories were"))
 	}
 	return nil
 }
@@ -739,10 +754,101 @@ func printResults(results []migrate.Result) {
 	}
 	_ = w.Flush()
 
-	fmt.Printf("\n%d migrated, %d already present, %d skipped, %d failed, %d to do\n\n",
+	held := ""
+	if counts[migrate.StatusHeld] > 0 {
+		held = fmt.Sprintf(", %d held back", counts[migrate.StatusHeld])
+	}
+	fmt.Printf("\n%d migrated, %d already present, %d skipped%s, %d failed, %d to do\n\n",
 		counts[migrate.StatusMigrated], counts[migrate.StatusExists],
-		counts[migrate.StatusSkipped], counts[migrate.StatusFailed],
+		counts[migrate.StatusSkipped], held, counts[migrate.StatusFailed],
 		counts[migrate.StatusPlanned])
+}
+
+// maxAddressesShown keeps one repository from filling the screen.
+const maxAddressesShown = 8
+
+// printFileAddresses reports email addresses found in the files of redacted
+// repositories: why the public ones were held back and what can be done, and
+// a warning for the private ones, where nothing was published yet.
+//
+// Written for people reading English as a second language: one idea per
+// sentence, and what did NOT happen said outright.
+func printFileAddresses(results []migrate.Result) {
+	for _, r := range results {
+		if len(r.FileAddresses) == 0 {
+			continue
+		}
+		name := r.Source[strings.Index(r.Source, "/")+1:]
+		switch r.Status {
+		case migrate.StatusHeld:
+			fmt.Printf("%s was NOT migrated. Its files contain email addresses,\n"+
+				"and it would be public on GitHub:\n", r.Source)
+		case migrate.StatusMigrated:
+			fmt.Printf("%s is private on GitHub, and its files contain email addresses:\n", r.Source)
+		default:
+			continue
+		}
+		for i, a := range r.FileAddresses {
+			if i == maxAddressesShown {
+				fmt.Printf("  ... and %d more\n", len(r.FileAddresses)-i)
+				break
+			}
+			fmt.Printf("  %-30s %s\n", a.Address, a.Where())
+		}
+		fmt.Println()
+		if r.Status == migrate.StatusMigrated {
+			fmt.Println("If you make it public later, these addresses will be published with it.")
+			fmt.Println()
+			continue
+		}
+		fmt.Printf("Redaction changes commits, NOT the files inside them. Your choices:\n"+
+			"  1  Migrate it as private instead:\n"+
+			"       press v on its row, or: gitea2github migrate --only %[1]s --visibility=private\n"+
+			"  2  Publish it anyway:\n"+
+			"       gitea2github migrate --only %[1]s --allow-emails-in-files\n"+
+			"  3  Remove the addresses from the files on Gitea first. Older versions\n"+
+			"     keep them too, so this needs the history rewritten (git filter-repo).\n\n", name)
+	}
+}
+
+// printLFS says which repositories use Git LFS, and how to copy their files:
+// a push carries only the pointers, so on GitHub the files are missing.
+func printLFS(results []migrate.Result) {
+	_, lfsInstalled := exec.LookPath("git-lfs")
+	for _, r := range results {
+		if len(r.LFSFiles) == 0 || r.Status != migrate.StatusMigrated {
+			continue
+		}
+		name := r.Target[strings.Index(r.Target, "/")+1:]
+		fmt.Printf("%s uses Git LFS: %s on GitHub as pointers only,\n"+
+			"NOT as the files themselves. Gitea still has the files.\n"+
+			"To copy them to GitHub:\n", r.Source, count(len(r.LFSFiles), "file is", "files are"))
+		step := 1
+		if lfsInstalled != nil {
+			fmt.Printf("  %d  Install Git LFS (once):  %s\n", step, lfsInstallHint())
+			step++
+		}
+		fmt.Printf("  %d  Run:\n"+
+			"       git clone --mirror %s %s-lfs\n"+
+			"       cd %[3]s-lfs\n"+
+			"       git lfs fetch --all\n"+
+			"       git lfs push --all https://github.com/%s.git\n"+
+			"       cd .. && rm -rf %[3]s-lfs\n\n",
+			step, forDisplay(r.SourceURL), name, r.Target)
+	}
+}
+
+// lfsInstallHint is how Git LFS is installed on this system.
+func lfsInstallHint() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "brew install git-lfs && git lfs install"
+	case "windows":
+		return "it comes with Git for Windows; run: git lfs install"
+	case "linux":
+		return "sudo apt install git-lfs && git lfs install  (or your distribution's package)"
+	}
+	return "see https://git-lfs.com, then run: git lfs install"
 }
 
 // exclusions carries the answers the numbered prompts collect, in and out.
