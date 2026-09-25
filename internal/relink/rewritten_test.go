@@ -127,6 +127,16 @@ func (f fakeGitHub) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		return reply(200, map[string]string{"sha": sha})
 
+	case strings.HasPrefix(path, prefix+"/branches/"):
+		branch := strings.TrimPrefix(path, prefix+"/branches/")
+		tree, err := exec.Command("git", "-C", f.scene.github, "rev-parse", "refs/heads/"+branch+"^{tree}").Output()
+		if err != nil {
+			return reply(404, map[string]string{"message": "Branch not found"})
+		}
+		body := map[string]any{"commit": map[string]any{"commit": map[string]any{
+			"tree": map[string]string{"sha": strings.TrimSpace(string(tree))}}}}
+		return reply(200, body)
+
 	case path == prefix+"/commits":
 		if f.empty {
 			return reply(409, map[string]string{"message": "Git Repository is empty."})
@@ -257,5 +267,33 @@ func TestEmptyGitHubRepositoryIsNotAdopted(t *testing.T) {
 	}
 	if got.Action != "skipped" || !strings.Contains(got.Reason, "empty") {
 		t.Errorf("want it skipped as empty, got %s: %s", got.Action, got.Reason)
+	}
+}
+
+// TestDifferentProjectWithTheNameIsNotAdopted is the collision this all
+// guards against: GitHub has a repository by this clone's name, but it is
+// another project -- your own implementation of an exercise, say, where the
+// clone is the group's. None of the clone's commits is there, which on its
+// own looks like a rewrite; the files say otherwise, and adopting would have
+// replaced this clone's project with the other one.
+func TestDifferentProjectWithTheNameIsNotAdopted(t *testing.T) {
+	s := newRewriteScene(t)
+	other := filepath.Join(s.root, "other")
+	s.git(t, s.root, "init", "-q", other)
+	s.git(t, other, "config", "user.email", "you@example.com")
+	s.git(t, other, "config", "user.name", "You")
+	if err := os.WriteFile(filepath.Join(other, "main.go"), []byte("a different program\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.git(t, other, "add", ".")
+	s.git(t, other, "commit", "-qm", "unrelated")
+	s.git(t, other, "branch", "-M", "main")
+	s.git(t, s.root, "init", "-q", "--bare", s.github)
+	s.git(t, other, "push", "-q", s.github, "main")
+
+	got := s.plan(t, false)
+	if got.Redacted || got.Action != "skipped" || !strings.Contains(got.Reason, "does not match") {
+		t.Fatalf("want it skipped as a different repository, got %s redacted=%v: %s",
+			got.Action, got.Redacted, got.Reason)
 	}
 }
