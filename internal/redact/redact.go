@@ -37,18 +37,18 @@ import (
 // that, which is reason enough on its own.
 //
 // The second reason is that the shape of a redacted address is read back
-// later. A repository on GitHub is the only record of how it was redacted, and
-// AddressPattern recovers that by recognising the addresses themselves. A
-// shape that varies from one run to the next is not a shape that can be
-// recognised.
+// later. Whether a repository was rewritten is settled by its commits, not
+// its addresses -- a history redacted with only its owner's address kept has
+// none in this shape -- but when the commits cannot be compared, recognising
+// the addresses themselves is what is left. A shape that varies from one run
+// to the next is not a shape that can be recognised.
 const Domain = "redacted.invalid"
 
 // AddressPattern matches an address this package produced.
 //
-// This is a contract, not an implementation detail. Recovering how a migration
-// was redacted -- which addresses were left alone, and therefore which ones a
-// later rewrite has to leave alone too -- means telling a redacted address from
-// a real one by looking at it. Changing the shape below silently strands every
+// This is a contract, not an implementation detail. It is the fallback for
+// telling a rewritten history from the original when the commits themselves
+// cannot be compared, and changing the shape below silently strands every
 // repository redacted before the change.
 var AddressPattern = regexp.MustCompile(`^[0-9a-f]{10}@` + regexp.QuoteMeta(Domain) + `$`)
 

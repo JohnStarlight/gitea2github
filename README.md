@@ -308,9 +308,11 @@ just created on GitHub: the copies there are different objects. Git rejects the
 push, and the hint it prints in rejecting it points at `--force`, which would
 republish every address the rewrite removed.
 
-`relink` recognises those repositories and offers one thing for them: the clone
-takes GitHub's rewritten history on and stops being a clone of the Gitea
-repository. `both` and `gitea` are greyed out, because neither is possible.
+`relink` recognises those repositories by asking GitHub for the commits the
+clone remembers from Gitea: a copy carries them across under the same hashes,
+and a rewrite carries none of them, whatever addresses it left behind. For those
+it offers one thing: the clone takes GitHub's rewritten history on and stops
+being a clone of the Gitea repository. `both` and `gitea` are greyed out, because neither is possible.
 
 ```
  > *  ~/Git/ascii-art   adopt   takes on GitHub's rewritten history; Gitea remote removed
@@ -377,12 +379,10 @@ Every replaced address takes the same shape: ten hexadecimal characters, then
 can never turn out to be a real mailbox belonging to somebody else. A domain
 chosen by whoever ran the migration cannot promise that.
 
-The shape also has to be recognisable later. A repository on GitHub is the only
-record of how it was redacted, and reading that back — which addresses were
-deliberately left alone, and so which ones anything working on that repository
-afterwards has to leave alone too — means telling a redacted address from a
-real one by looking at it. A shape that varied from run to run could not be
-recognised at all.
+The shape also stays recognisable. A stand-in can be told from a real address
+by looking at it, by a person or by a tool, and `relink` falls back on exactly
+that when it cannot compare commits with GitHub. A shape that varied from run
+to run could not be recognised at all.
 
 ## What gets skipped, and why
 
