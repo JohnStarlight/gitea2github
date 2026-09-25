@@ -50,6 +50,11 @@ type Result struct {
 	// removed. The only coherent outcome is for the clone to take on the
 	// rewritten history and stop being a clone of the Gitea repository.
 	Redacted bool
+
+	// AdoptProblems are the branches and tags that stopped this clone taking
+	// on a rewritten history, so that what can be done about them can be
+	// said once, below the table, rather than crammed into a row.
+	AdoptProblems []AdoptProblem
 }
 
 // Modes for where a relinked clone should push.
@@ -269,12 +274,17 @@ func relinkOne(ctx context.Context, path string, gh *github.Client, opts Options
 		return res
 	}
 
+	var side GitHubSide
+	if gh != nil {
+		side = APISide{GH: gh, Owner: opts.GitHubUser, Name: target}
+	}
+
 	if opts.DryRun {
 		res.Action = "planned"
 		if res.Redacted {
 			res.Reason = "take on GitHub's rewritten history; Gitea remote removed"
-			if risk := CheckAdoptable(ctx, path); risk.Reason != "" {
-				res.Action, res.Reason = "skipped", risk.Reason
+			if risk := CheckAdoptable(ctx, path, side); risk.Reason != "" {
+				res.Action, res.Reason, res.AdoptProblems = "skipped", risk.Reason, risk.Problems
 			}
 		} else {
 			res.Reason = plannedDescription(mode, opts.OldRemoteName)
@@ -286,8 +296,8 @@ func relinkOne(ctx context.Context, path string, gh *github.Client, opts Options
 		// Asked again rather than trusted from the plan: the working copy may
 		// have been touched since, and what is checked here is whether work
 		// would be lost.
-		if risk := CheckAdoptable(ctx, path); risk.Reason != "" {
-			res.Action, res.Reason = "skipped", risk.Reason
+		if risk := CheckAdoptable(ctx, path, side); risk.Reason != "" {
+			res.Action, res.Reason, res.AdoptProblems = "skipped", risk.Reason, risk.Problems
 			return res
 		}
 		if err := Adopt(ctx, path, res.NewURL, opts.GitEnv, opts.Log); err != nil {
