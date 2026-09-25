@@ -127,15 +127,25 @@ func (f *fakeGitHub) RoundTrip(req *http.Request) (*http.Response, error) {
 	return reply(404, map[string]string{"message": "unexpected " + req.Method + " " + req.URL.Path})
 }
 
+// repo is the Gitea repository of the scene as the API would list it.
+func (s resumeScene) repo(private bool) gitea.Repo {
+	repo := gitea.Repo{Name: "demo", FullName: "me/demo", CloneURL: s.gitea, Private: private}
+	repo.Owner.Login = "me"
+	return repo
+}
+
+// newTestClient is a GitHub client whose requests f answers.
+func newTestClient(f *fakeGitHub) *github.Client {
+	client := github.New("t0ken-for-tests")
+	client.HTTP = &http.Client{Transport: f}
+	return client
+}
+
 func (s resumeScene) run(f *fakeGitHub, sourcePrivate, dryRun bool, mode VisibilityMode) Result {
 	s.t.Helper()
 	f.scene = s
-	client := github.New("t0ken-for-tests")
-	client.HTTP = &http.Client{Transport: f}
-
-	repo := gitea.Repo{Name: "demo", FullName: "me/demo", CloneURL: s.gitea, Private: sourcePrivate}
-	repo.Owner.Login = "me"
-	results := Run(context.Background(), []gitea.Repo{repo}, Options{
+	client := newTestClient(f)
+	results := Run(context.Background(), []gitea.Repo{s.repo(sourcePrivate)}, Options{
 		GiteaUser:   "me",
 		GitHubUser:  "me",
 		GitHubTok:   "t0ken-for-tests",
