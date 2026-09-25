@@ -1,21 +1,7 @@
 // The migrate command: everything between "what does Gitea have" and "it is on
 // GitHub now", including the questions asked when there is no terminal for the
 // selection screen.
-// Command gitea2github migrates Git repositories from a Gitea instance to
-// GitHub, with all branches and tags intact, and repoints local clones at the
-// new home.
-//
-// It exists because doing this by hand — create repository, copy URL, add
-// remote, push, repeat — is both tedious and lossy: the manual route usually
-// carries over only the branch that happened to be checked out.
-//
-// Typical session:
-//
-//	gitea2github doctor                 # check credentials and scopes
-//	gitea2github list                   # see what would be considered
-//	gitea2github migrate --dry-run      # see what would happen
-//	gitea2github migrate                # do it
-//	gitea2github relink ~/Git           # repoint local clones
+
 package main
 
 import (
@@ -399,13 +385,6 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	return nil
 }
 
-// offerRelink asks whether to repoint the local clones, and opens the
-// repointing screen if the answer is yes.
-//
-// Deliberately quiet about its own failures: the migration has already
-// succeeded by this point, and a directory that cannot be scanned is a reason
-// to say so and stop, not to report the whole run as failed.
-
 // askExclusions runs the question sequence used when the selection screen is
 // not available, returning the answers.
 //
@@ -455,16 +434,6 @@ func askExclusions(prompt *ui.Prompter, repos []gitea.Repo, giteaUser string,
 	return answers
 }
 
-// forDisplay strips any credentials from a URL before it is printed.
-//
-// The Gitea address comes from a flag, and somebody who is used to
-// authenticating that way will sooner or later pass
-// https://me:token@gitea.example.com/git. Echoing it back verbatim would put
-// their token in the terminal scrollback, in a screenshot, and in the bug
-// report they paste it into. Nothing else needs the credential -- the API
-// client sends it as a header, and git is handed its own through askpass -- so
-// the display is the only place it could escape from.
-
 // exclusions carries the answers the numbered prompts collect, in and out.
 //
 // Passed as a struct rather than as five arguments and five results so that a
@@ -477,19 +446,6 @@ type exclusions struct {
 	RedactEmails   bool
 	KeepEmail      string
 }
-
-// askExclusions runs the question sequence used when the selection screen is
-// not available, returning the answers.
-//
-// Separated from cmdMigrate so the sequence can be driven by a test: this is
-// the path every script, every CI job and every --no-tui run takes, and until
-// it was extracted nothing exercised it end to end.
-//
-// A question is only asked when the account actually contains something it
-// would exclude, and never when the flag was given explicitly: asking "include
-// forks?" of somebody who has none is noise, and noise is what trains people
-// to stop reading prompts. Anything the user set on the command line is their
-// decision and must not be second-guessed by a question.
 
 // buildRows turns the repository list and its dry-run probe into the rows the
 // selection screen displays.
@@ -543,13 +499,6 @@ func buildRows(repos []gitea.Repo, probe []migrate.Result, giteaUser string,
 // Reusing the probe rather than running a second dry run is what keeps the
 // selector to a single wait: the answer to "is this already on GitHub?" does
 // not change while somebody is reading the screen.
-
-// planFromProbe narrows the dry-run probe to the chosen repositories and
-// applies the visibility the user picked for each.
-//
-// Reusing the probe rather than running a second dry run is what keeps the
-// selector to a single wait: the answer to "is this already on GitHub?" does
-// not change while somebody is reading the screen.
 func planFromProbe(probe []migrate.Result, selected []string, overrides map[string]bool) []migrate.Result {
 	chosen := make(map[string]bool, len(selected))
 	for _, name := range selected {
@@ -568,12 +517,6 @@ func planFromProbe(probe []migrate.Result, selected []string, overrides map[stri
 	}
 	return plan
 }
-
-// addAddress appends addr to list unless it is empty or already there.
-//
-// The screen seeds its one address from the list, so handing the same address
-// straight back must not lengthen it: a duplicate would make redact.Mapper
-// report a count that does not match what the user typed.
 
 // findLocalWork looks through the copies under root for work that Gitea does
 // not have, in the repositories about to be migrated, and says what it found.
@@ -851,12 +794,6 @@ func lfsInstallHint() string {
 	return "see https://git-lfs.com, then run: git lfs install"
 }
 
-// exclusions carries the answers the numbered prompts collect, in and out.
-//
-// Passed as a struct rather than as five arguments and five results so that a
-// caller cannot silently swap two booleans of the same type, which is exactly
-// the mistake that would widen a migration without anyone noticing.
-
 // plannedIndices returns the positions of the rows that will actually be
 // created, in the order printResults numbers them. Sharing the order is what
 // makes the numbers the user types line up with the rows they read.
@@ -869,14 +806,6 @@ func plannedIndices(results []migrate.Result) []int {
 	}
 	return indices
 }
-
-// askVisibilityFlips offers to invert the visibility of individual
-// repositories and returns the overrides, keyed by Gitea full name.
-//
-// Framed as "change these" rather than "choose for each" so that the default --
-// pressing Enter -- leaves every repository exactly as it is on Gitea. A
-// question that has to be answered for thirty repositories would be answered
-// carelessly.
 
 // askVisibilityFlips offers to invert the visibility of individual
 // repositories and returns the overrides, keyed by Gitea full name.
@@ -905,16 +834,12 @@ func askVisibilityFlips(prompt *ui.Prompter, plan []migrate.Result, pending []in
 }
 
 // visibilityWord renders a visibility boolean the way GitHub labels it.
-
-// visibilityWord renders a visibility boolean the way GitHub labels it.
 func visibilityWord(private bool) string {
 	if private {
 		return "private"
 	}
 	return "public"
 }
-
-// countStatus tallies one outcome across a result set.
 
 // countStatus tallies one outcome across a result set.
 func countStatus(results []migrate.Result, status migrate.Status) int {
@@ -931,11 +856,6 @@ func countStatus(results []migrate.Result, status migrate.Status) int {
 //
 // Empty repositories can never be migrated whatever the user answers, so
 // including them would inflate a count that exists to help someone decide.
-
-// countMatching counts the repositories satisfying pred, ignoring empty ones.
-//
-// Empty repositories can never be migrated whatever the user answers, so
-// including them would inflate a count that exists to help someone decide.
 func countMatching(repos []gitea.Repo, pred func(gitea.Repo) bool) int {
 	n := 0
 	for _, r := range repos {
@@ -945,9 +865,6 @@ func countMatching(repos []gitea.Repo, pred func(gitea.Repo) bool) int {
 	}
 	return n
 }
-
-// plural picks a word form, so counts read as sentences rather than as
-// "1 repositor(y/ies)".
 
 // unmatchedNames is the names given to --only that match no repository, as
 // they were typed.
@@ -980,10 +897,6 @@ func filterByName(repos []gitea.Repo, names []string) []gitea.Repo {
 	return out
 }
 
-// stringList collects a flag that may be repeated, so that several addresses
-// can be kept with separate --keep-email arguments rather than one
-// comma-separated value that would break on any address containing a comma.
-
 // filterByFullName narrows repos to the given Gitea full names, preserving the
 // original order so the plan and the results table stay in step.
 func filterByFullName(repos []gitea.Repo, names []string) []gitea.Repo {
@@ -999,10 +912,6 @@ func filterByFullName(repos []gitea.Repo, names []string) []gitea.Repo {
 	}
 	return out
 }
-
-// plannedIndices returns the positions of the rows that will actually be
-// created, in the order printResults numbers them. Sharing the order is what
-// makes the numbers the user types line up with the rows they read.
 
 // addAddress appends addr to list unless it is empty or already there.
 //
@@ -1020,6 +929,3 @@ func addAddress(list []string, addr string) []string {
 	}
 	return append(list, addr)
 }
-
-// filterByFullName narrows repos to the given Gitea full names, preserving the
-// original order so the plan and the results table stay in step.

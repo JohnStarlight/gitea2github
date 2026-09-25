@@ -1,21 +1,7 @@
 // The two commands that only look: doctor, which checks the credentials and
 // their scopes before anything depends on them, and list, which shows what
 // Gitea holds and how each repository would be classified.
-// Command gitea2github migrates Git repositories from a Gitea instance to
-// GitHub, with all branches and tags intact, and repoints local clones at the
-// new home.
-//
-// It exists because doing this by hand — create repository, copy URL, add
-// remote, push, repeat — is both tedious and lossy: the manual route usually
-// carries over only the branch that happened to be checked out.
-//
-// Typical session:
-//
-//	gitea2github doctor                 # check credentials and scopes
-//	gitea2github list                   # see what would be considered
-//	gitea2github migrate --dry-run      # see what would happen
-//	gitea2github migrate                # do it
-//	gitea2github relink ~/Git           # repoint local clones
+
 package main
 
 import (
@@ -148,17 +134,10 @@ func cmdDoctor(ctx context.Context, args []string) error {
 // alignContinuation indents every line after the first far enough to sit under
 // the start of the message column, so a multi-line remedy does not break the
 // report's layout.
-
-// alignContinuation indents every line after the first far enough to sit under
-// the start of the message column, so a multi-line remedy does not break the
-// report's layout.
 func alignContinuation(msg string) string {
 	const column = "                     " // width of "  <check>    FAIL  "
 	return strings.ReplaceAll(msg, "\n", "\n"+column)
 }
-
-// cmdList prints the repositories the migrator can see, with the reason any of
-// them would be skipped. It is the cheapest way to sanity-check the filters.
 
 // cmdList prints the repositories the migrator can see, with the reason any of
 // them would be skipped. It is the cheapest way to sanity-check the filters.
@@ -208,8 +187,6 @@ func cmdList(ctx context.Context, args []string) error {
 	}
 	return w.Flush()
 }
-
-// cmdMigrate is the main event.
 
 // checkGitHubScopes reports whether the GitHub token can do what a migration
 // asks of it. Finding out from a failed push, twenty repositories in, is the
