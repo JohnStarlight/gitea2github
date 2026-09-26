@@ -447,7 +447,7 @@ func TestCommitAsQuestion(t *testing.T) {
 	plan := []relink.Result{
 		{Path: "/a", Action: "planned", Redacted: true, CommitName: "me", CommitEmail: "you@example.com"},
 		{Path: "/b", Action: "planned", CommitName: "me", CommitEmail: "you@example.com"},
-		{Path: "/c", Action: "planned", CommitName: id.Name, CommitEmail: id.Email},     // already
+		{Path: "/c", Action: "planned", CommitName: id.Name, CommitEmail: id.Email},       // already
 		{Path: "/d", Action: "planned", CommitName: "me", CommitEmail: "you@example.com"}, // stays on Gitea
 		{Path: "/e", Action: "skipped", CommitName: "me", CommitEmail: "you@example.com"},
 	}
