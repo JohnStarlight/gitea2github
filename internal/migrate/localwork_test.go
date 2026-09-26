@@ -107,7 +107,7 @@ func TestMigrationTakesTheWorkFromThisComputer(t *testing.T) {
 		GiteaUser: "me", GitHubUser: "me", GitHubTok: "t0ken-for-tests", Concurrency: 1,
 		Mapper:    redact.NewMapper(nil, ""),
 		LocalWork: map[string]LocalWork{"me/demo": found},
-		client:    client,
+		GitHub:    client,
 	})
 	got := results[0]
 	if got.Status != StatusMigrated || !got.WithLocalWork {

@@ -31,7 +31,19 @@ import (
 
 	"github.com/JohnStarlight/gitea2github/internal/creds"
 	"github.com/JohnStarlight/gitea2github/internal/gitea"
+	"github.com/JohnStarlight/gitea2github/internal/github"
 	"github.com/JohnStarlight/gitea2github/internal/migrate"
+	"github.com/JohnStarlight/gitea2github/internal/ui"
+)
+
+// newGitHub and newPrompter build the two things that reach outside the
+// process on the user's behalf: GitHub's API and the terminal. They are
+// variables so that the tests of the commands can answer both themselves.
+// GitHub's address stays a constant in the github package either way; a test
+// replaces the transport underneath the client, never the address.
+var (
+	newGitHub   = github.New
+	newPrompter = ui.New
 )
 
 // defaultGiteaURL points at the Zone01 Greece instance, which is the audience

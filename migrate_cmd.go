@@ -19,7 +19,6 @@ import (
 
 	"github.com/JohnStarlight/gitea2github/internal/creds"
 	"github.com/JohnStarlight/gitea2github/internal/gitea"
-	"github.com/JohnStarlight/gitea2github/internal/github"
 	"github.com/JohnStarlight/gitea2github/internal/migrate"
 	"github.com/JohnStarlight/gitea2github/internal/redact"
 	"github.com/JohnStarlight/gitea2github/internal/relink"
@@ -79,7 +78,7 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	given := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
 
-	prompt := ui.New()
+	prompt := newPrompter()
 
 	client, giteaCred, err := resolveGitea(*giteaURL)
 	if err != nil {
@@ -93,7 +92,7 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	ghClient := github.New(ghCred.Token)
+	ghClient := newGitHub(ghCred.Token)
 	me, err := ghClient.Identity(ctx)
 	if err != nil {
 		return fmt.Errorf("identifying GitHub user: %w", err)
@@ -159,6 +158,7 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		// another sweep of the API, which is what lets the screen respond to a
 		// keystroke instead of to a round trip.
 		probeOptions := migrate.Options{
+			GitHub:                ghClient,
 			GiteaUser:             giteaUser,
 			GiteaToken:            giteaCred.Token,
 			GitHubUser:            ghLogin,
@@ -246,6 +246,7 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	}
 
 	options := migrate.Options{
+		GitHub:                ghClient,
 		GiteaUser:             giteaUser,
 		GiteaToken:            giteaCred.Token,
 		GitHubUser:            ghLogin,

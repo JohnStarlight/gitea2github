@@ -113,7 +113,7 @@ func cmdDoctor(ctx context.Context, args []string) error {
 		fail("credential", "%v", err)
 	} else {
 		ok("credential", "via %s", ghCred.Source)
-		gh := github.New(ghCred.Token)
+		gh := newGitHub(ghCred.Token)
 		if login, err := gh.Login(ctx); err != nil {
 			fail("identity", "%v", err)
 		} else {

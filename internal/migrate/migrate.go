@@ -162,9 +162,10 @@ type Options struct {
 	// package asks Gitea nothing itself.
 	Topics func(ctx context.Context, repo gitea.Repo) ([]string, error)
 
-	// client replaces the GitHub client Run would build, so tests can answer
-	// its questions without an account behind them.
-	client *github.Client
+	// GitHub, when set, is the client used instead of one built from
+	// GitHubTok. The caller that already has one hands it over, and a test
+	// hands over one whose requests it answers itself.
+	GitHub *github.Client
 
 	// WorkDir holds the temporary mirror clones. When empty a directory under
 	// the system temp location is created and removed afterwards.
@@ -203,7 +204,7 @@ func Run(ctx context.Context, repos []gitea.Repo, opts Options) []Result {
 		defer os.RemoveAll(workDir)
 	}
 
-	gh := opts.client
+	gh := opts.GitHub
 	if gh == nil {
 		gh = github.New(opts.GitHubTok)
 	}

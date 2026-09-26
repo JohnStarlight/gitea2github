@@ -89,7 +89,7 @@ func migrateWithAddress(t *testing.T, private, redacting, allow bool) (Result, [
 	f.scene = s
 	opts := Options{
 		GiteaUser: "me", GitHubUser: "me", GitHubTok: "t0ken-for-tests", Concurrency: 1,
-		AllowEmailsInFiles: allow, client: newTestClient(f),
+		AllowEmailsInFiles: allow, GitHub: newTestClient(f),
 	}
 	if redacting {
 		opts.Mapper = redact.NewMapper(nil, "")

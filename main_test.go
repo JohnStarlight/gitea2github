@@ -429,13 +429,21 @@ func captureStdout(t *testing.T, f func()) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Read while f writes: a pipe holds only so much, and a command that
+	// prints more than that would otherwise block on a reader that has not
+	// started.
+	done := make(chan []byte)
+	go func() {
+		out, _ := io.ReadAll(r)
+		done <- out
+	}()
 	saved := os.Stdout
 	os.Stdout = w
+	defer func() { os.Stdout = saved }()
 	f()
 	os.Stdout = saved
 	w.Close()
-	out, _ := io.ReadAll(r)
-	return string(out)
+	return string(<-done)
 }
 
 // TestCommitAsQuestion: asked only about clones whose pushes go to GitHub and

@@ -174,7 +174,7 @@ func (s rewriteScene) plan(t *testing.T, empty bool) Result {
 		Mode:       ModeGitHub,
 		Verify:     true,
 		DryRun:     true,
-		client:     client,
+		GitHub:     client,
 	})
 	if err != nil {
 		t.Fatal(err)

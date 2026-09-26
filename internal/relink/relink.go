@@ -153,9 +153,10 @@ type Options struct {
 	// publish it with its next push.
 	CommitAs *Identity
 
-	// client replaces the GitHub client Verify would build, so tests can
-	// answer its questions without an account behind them.
-	client *github.Client
+	// GitHub, when set, is the client Verify uses instead of one built from
+	// GitHubTok. The caller that already has one hands it over, and a test
+	// hands over one whose requests it answers itself.
+	GitHub *github.Client
 }
 
 // Run scans Root for git working copies whose origin lives on GiteaHost and
@@ -175,7 +176,7 @@ func Run(ctx context.Context, opts Options) ([]Result, error) {
 
 	var gh *github.Client
 	if opts.Verify {
-		gh = opts.client
+		gh = opts.GitHub
 		if gh == nil {
 			gh = github.New(opts.GitHubTok)
 		}

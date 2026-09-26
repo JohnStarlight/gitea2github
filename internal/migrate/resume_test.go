@@ -169,7 +169,7 @@ func (s resumeScene) run(f *fakeGitHub, sourcePrivate, dryRun bool, mode Visibil
 		Visibility:  mode,
 		Concurrency: 1,
 		DryRun:      dryRun,
-		client:      client,
+		GitHub:      client,
 	})
 	return results[0]
 }
@@ -297,7 +297,7 @@ func TestDefaultBranchFollowsGitea(t *testing.T) {
 		repo.DefaultBr = c.giteaDefault
 		got := Run(context.Background(), []gitea.Repo{repo}, Options{
 			GiteaUser: "me", GitHubUser: "me", GitHubTok: "t0ken-for-tests", Concurrency: 1,
-			client: newTestClient(f),
+			GitHub: newTestClient(f),
 		})[0]
 		if got.Status != StatusMigrated {
 			t.Fatalf("%q: %s: %s", c.giteaDefault, got.Status, got.Reason)
@@ -321,7 +321,7 @@ func TestWebsiteAndTopicsComeAlong(t *testing.T) {
 		Topics: func(context.Context, gitea.Repo) ([]string, error) {
 			return []string{"go", "Zone01.gr"}, nil
 		},
-		client: newTestClient(f),
+		GitHub: newTestClient(f),
 	})[0]
 	if got.Status != StatusMigrated || got.Reason != "" {
 		t.Fatalf("%s: %s", got.Status, got.Reason)

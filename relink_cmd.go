@@ -58,7 +58,7 @@ func cmdRelink(ctx context.Context, args []string) error {
 
 	given := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
-	prompt := ui.New()
+	prompt := newPrompter()
 
 	// The directory defaults to the one you are standing in, which is where
 	// clones almost always are and what the offer at the end of a migration
@@ -83,7 +83,8 @@ func cmdRelink(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	me, err := github.New(ghCred.Token).Identity(ctx)
+	ghClient := newGitHub(ghCred.Token)
+	me, err := ghClient.Identity(ctx)
 	if err != nil {
 		return fmt.Errorf("identifying GitHub user: %w", err)
 	}
@@ -106,6 +107,7 @@ func cmdRelink(ctx context.Context, args []string) error {
 	// The screen needs to know what is out there before it can offer anything,
 	// so the scan comes first and is reused as the plan afterwards.
 	probeOptions := relink.Options{
+		GitHub:        ghClient,
 		Root:          root,
 		GiteaHost:     parsed.Host,
 		GitHubUser:    ghLogin,
@@ -174,6 +176,7 @@ func cmdRelink(ctx context.Context, args []string) error {
 	}
 
 	options := relink.Options{
+		GitHub:        ghClient,
 		Root:          root,
 		GiteaHost:     parsed.Host,
 		GitHubUser:    ghLogin,
@@ -328,8 +331,10 @@ func offerRelink(ctx context.Context, prompt *ui.Prompter, clonesRoot, giteaURL,
 	if err != nil {
 		return
 	}
+	gh := newGitHub(ghToken)
 	probe, err := relink.Run(ctx, relink.Options{
-		Root: cwd, GiteaHost: parsed.Host, GitHubUser: ghLogin, GitHubTok: ghToken,
+		GitHub: gh,
+		Root:   cwd, GiteaHost: parsed.Host, GitHubUser: ghLogin, GitHubTok: ghToken,
 		OldRemoteName: "gitea", Mode: relink.ModeGitHub, Verify: true, DryRun: true,
 		Targets: targets,
 	})
@@ -344,6 +349,7 @@ func offerRelink(ctx context.Context, prompt *ui.Prompter, clonesRoot, giteaURL,
 	}
 
 	base := relink.Options{
+		GitHub:    gh,
 		GiteaHost: parsed.Host, GitHubUser: ghLogin, GitHubTok: ghToken,
 		OldRemoteName: "gitea", Mode: relink.ModeGitHub, Verify: true,
 		GitEnv:  migrate.CredentialEnv("x-access-token", ghToken),
@@ -377,7 +383,7 @@ func offerRelink(ctx context.Context, prompt *ui.Prompter, clonesRoot, giteaURL,
 
 	plan := relinkPlanFromProbe(probe, only, modes, relink.ModeGitHub, "gitea")
 	printRelinkResults(plan)
-	if me, err := github.New(ghToken).Identity(ctx); err == nil {
+	if me, err := base.GitHub.Identity(ctx); err == nil {
 		id := relink.Identity{Name: me.Login, Email: me.NoReply}
 		if concerned, redacted := commitAsConcerned(plan, modes, relink.ModeGitHub, id); len(concerned) > 0 {
 			if question, yes := commitAsQuestion(concerned, redacted, id); prompt.Confirm(question, yes) {
