@@ -33,6 +33,9 @@ func cmdRelink(ctx context.Context, args []string) error {
 	pushTo := fs.String("push-to", relink.ModeGitHub,
 		"where relinked clones should push: github, both, or gitea")
 	noTUI := fs.Bool("no-tui", false, "choose from numbered prompts instead of the full-screen selector")
+	commitAs := fs.String("commit-as", "",
+		"who new commits are made as in clones that will push to GitHub: "+
+			"github (your GitHub name and no-reply address, in those clones only) or keep; asked when not given")
 	var names stringList
 	fs.Var(&names, "name",
 		"the name a repository took on GitHub, as owner/repo=name, when it is not its own (repeatable)")
@@ -42,6 +45,9 @@ func cmdRelink(ctx context.Context, args []string) error {
 	named, err := parseNames(names)
 	if err != nil {
 		return err
+	}
+	if *commitAs != "" && *commitAs != "github" && *commitAs != "keep" {
+		return fmt.Errorf("--commit-as must be github or keep (got %q)", *commitAs)
 	}
 	switch *pushTo {
 	case relink.ModeGitHub, relink.ModeBoth, relink.ModeGitea:
@@ -77,10 +83,11 @@ func cmdRelink(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	ghLogin, err := github.New(ghCred.Token).Login(ctx)
+	me, err := github.New(ghCred.Token).Identity(ctx)
 	if err != nil {
 		return fmt.Errorf("identifying GitHub user: %w", err)
 	}
+	ghLogin := me.Login
 
 	// Not fatal: without the list, each clone is matched by its own name,
 	// which is right for every repository the migration did not rename --
@@ -199,6 +206,24 @@ func cmdRelink(ctx context.Context, args []string) error {
 	if pending == 0 {
 		fmt.Println("Nothing to do.")
 		return nil
+	}
+
+	id := relink.Identity{Name: me.Login, Email: me.NoReply}
+	if concerned, redacted := commitAsConcerned(plan, modeFor, *pushTo, id); len(concerned) > 0 {
+		switch {
+		case *commitAs == "github":
+			options.CommitAs = &id
+		case *commitAs == "keep":
+		case prompt.Interactive() && !*assumeYes:
+			question, yes := commitAsQuestion(concerned, redacted, id)
+			if prompt.Confirm("\n"+question, yes) {
+				options.CommitAs = &id
+			}
+		case redacted:
+			fmt.Printf("New commits in %s will still carry %s, and the next push would publish it.\n"+
+				"Pass --commit-as=github to make them as %s in those clones.\n",
+				count(len(concerned), "clone", "clones"), strings.Join(commitEmails(concerned, id), ", "), id)
+		}
 	}
 
 	if !*assumeYes {
@@ -352,6 +377,14 @@ func offerRelink(ctx context.Context, prompt *ui.Prompter, clonesRoot, giteaURL,
 
 	plan := relinkPlanFromProbe(probe, only, modes, relink.ModeGitHub, "gitea")
 	printRelinkResults(plan)
+	if me, err := github.New(ghToken).Identity(ctx); err == nil {
+		id := relink.Identity{Name: me.Login, Email: me.NoReply}
+		if concerned, redacted := commitAsConcerned(plan, modes, relink.ModeGitHub, id); len(concerned) > 0 {
+			if question, yes := commitAsQuestion(concerned, redacted, id); prompt.Confirm(question, yes) {
+				base.CommitAs = &id
+			}
+		}
+	}
 	if !prompt.Confirm(fmt.Sprintf("Repoint %d clone%s?", len(only), plural(len(only), "", "s")), false) {
 		fmt.Println("Cancelled; no remote was changed.")
 		return
@@ -365,6 +398,83 @@ func offerRelink(ctx context.Context, prompt *ui.Prompter, clonesRoot, giteaURL,
 		return
 	}
 	printRelinkResults(results)
+}
+
+// commitAsConcerned is the clones in a plan whose pushes will go to GitHub
+// and whose commits are not made as the GitHub identity -- the ones where
+// who a commit is made as is about to become public. redacted reports that
+// one of them takes on a rewritten history, where the address in its config
+// is one the migration went out of its way to hide.
+func commitAsConcerned(plan []relink.Result, modes map[string]string, fallback string,
+	id relink.Identity) (concerned []relink.Result, redacted bool) {
+
+	for _, r := range plan {
+		if r.Action != "planned" {
+			continue
+		}
+		mode := fallback
+		if m, ok := modes[r.Path]; ok && m != "" {
+			mode = m
+		}
+		if !r.Redacted && mode != relink.ModeGitHub {
+			continue // still pushes to Gitea too
+		}
+		if r.CommitName == id.Name && r.CommitEmail == id.Email {
+			continue
+		}
+		concerned = append(concerned, r)
+		redacted = redacted || r.Redacted
+	}
+	return concerned, redacted
+}
+
+// commitEmails is the addresses those clones commit with, other than the
+// no-reply one, each once.
+func commitEmails(clones []relink.Result, id relink.Identity) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, r := range clones {
+		e := r.CommitEmail
+		if e == "" {
+			e = "no address at all"
+		}
+		if e != id.Email && !seen[e] {
+			seen[e] = true
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// commitAsQuestion asks whether those clones should commit as the GitHub
+// identity, in plain words, and says which answer is the default.
+//
+// After a redacting migration the answer defaults to yes: the address in
+// their config is the one the rewrite hid, and the next push would publish
+// it. Otherwise it defaults to no, since that history was published as it
+// is, and changing who someone commits as is theirs to choose.
+func commitAsQuestion(clones []relink.Result, redacted bool, id relink.Identity) (string, bool) {
+	where := "this clone"
+	if len(clones) > 1 {
+		where = fmt.Sprintf("these %d clones", len(clones))
+	}
+	emails := commitEmails(clones, id)
+	if redacted && len(emails) > 0 {
+		return fmt.Sprintf("New commits in %s would still carry %s,\n"+
+			"and the next push would publish it on GitHub.\n"+
+			"Make them as %s, in %s only?", where, strings.Join(emails, ", "), id, where), true
+	}
+	seen := map[string]bool{}
+	var current []string
+	for _, r := range clones {
+		c := relink.Identity{Name: r.CommitName, Email: r.CommitEmail}.String()
+		if !seen[c] {
+			seen[c] = true
+			current = append(current, c)
+		}
+	}
+	return fmt.Sprintf("New commits in %s are made as %s.\n"+
+		"Make them as %s instead, in %s only?", where, strings.Join(current, ", "), id, where), redacted
 }
 
 // relinkChoice is what the repointing screen was left with.

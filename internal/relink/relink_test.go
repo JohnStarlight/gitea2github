@@ -228,3 +228,32 @@ func TestGiteaFullName(t *testing.T) {
 		}
 	}
 }
+
+// TestCommitAsIsSetInTheCloneOnly: a clone that now pushes to GitHub commits
+// as the GitHub identity, set in its own config; a clone that still pushes to
+// Gitea is left alone, and so is the user's global config.
+func TestCommitAsIsSetInTheCloneOnly(t *testing.T) {
+	id := &Identity{Name: "JohnStarlight", Email: "1+JohnStarlight@users.noreply.github.com"}
+	for _, c := range []struct {
+		mode string
+		want bool
+	}{{ModeGitHub, true}, {ModeGitea, false}, {ModeBoth, false}} {
+		root := newClone(t)
+		clone := filepath.Join(root, "demo")
+		run(t, clone, "git", "config", "user.name", "someone-on-gitea")
+		run(t, clone, "git", "config", "user.email", "you@example.com")
+
+		opts := options(root, c.mode)
+		opts.CommitAs = id
+		results, err := Run(context.Background(), opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := run(t, clone, "git", "config", "--local", "user.name")
+		email := run(t, clone, "git", "config", "--local", "user.email")
+		set := name == id.Name && email == id.Email
+		if set != c.want || results[0].CommitAsSet != c.want {
+			t.Errorf("%s: config %s <%s>, CommitAsSet=%v; want set=%v", c.mode, name, email, results[0].CommitAsSet, c.want)
+		}
+	}
+}

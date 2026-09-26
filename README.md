@@ -283,6 +283,21 @@ and `d` points the screen at another directory without leaving it. `r` gives a
 clone the name its repository took on GitHub, when that is not its own name —
 say, one you typed during the migration — and looks for it there.
 
+**Who your next commits are made as.** A clone keeps the name and address
+your git config gives it, and its next push to GitHub publishes them — after
+a redacting migration, that may be the very address the rewrite hid. For the
+clones whose pushes will go to GitHub, `relink` offers to make new commits as
+your GitHub login and no-reply address instead, set in those clones only and
+never in your global config, which your Gitea work uses too:
+
+```
+New commits in these 3 clones would still carry you@example.com,
+and the next push would publish it on GitHub.
+Make them as JohnStarlight <259051186+JohnStarlight@users.noreply.github.com>, in these 3 clones only? [Y/n]
+```
+
+After a redacting migration the answer defaults to yes; otherwise to no.
+
 **`both` needs the GitHub repository to be private.** It carries whatever you
 commit to GitHub on every push, addresses and all — contained while the
 destination is private, a continuous publication while it is not.
@@ -587,6 +602,7 @@ gitea2github relink --dry-run ~/Git       # plan only
 | `--keep-as` | `gitea` | New name for the old remote (`--push-to=github` only) |
 | `--verify` | `true` | Confirm the GitHub repository exists first |
 | `--name` | none | The name a repository took on GitHub, as `owner/repo=name` (repeatable) |
+| `--commit-as` | asked | `github`: new commits in clones that push to GitHub use your GitHub name and no-reply address; `keep`: leave them |
 
 | `--push-to` | `origin` fetches | `git push` goes to | Extra remotes |
 | --- | --- | --- | --- |

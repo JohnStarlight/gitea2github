@@ -437,3 +437,38 @@ func captureStdout(t *testing.T, f func()) string {
 	out, _ := io.ReadAll(r)
 	return string(out)
 }
+
+// TestCommitAsQuestion: asked only about clones whose pushes go to GitHub and
+// whose commits are not already the GitHub identity; defaulting to yes after
+// a redacting migration, where the next push would publish the hidden
+// address, and to no otherwise.
+func TestCommitAsQuestion(t *testing.T) {
+	id := relink.Identity{Name: "JohnStarlight", Email: "1+JohnStarlight@users.noreply.github.com"}
+	plan := []relink.Result{
+		{Path: "/a", Action: "planned", Redacted: true, CommitName: "me", CommitEmail: "you@example.com"},
+		{Path: "/b", Action: "planned", CommitName: "me", CommitEmail: "you@example.com"},
+		{Path: "/c", Action: "planned", CommitName: id.Name, CommitEmail: id.Email},     // already
+		{Path: "/d", Action: "planned", CommitName: "me", CommitEmail: "you@example.com"}, // stays on Gitea
+		{Path: "/e", Action: "skipped", CommitName: "me", CommitEmail: "you@example.com"},
+	}
+	concerned, redacted := commitAsConcerned(plan, map[string]string{"/d": relink.ModeGitea}, relink.ModeGitHub, id)
+	if len(concerned) != 2 || !redacted {
+		t.Fatalf("concerned %d clones, redacted=%v; want 2, true", len(concerned), redacted)
+	}
+	q, yes := commitAsQuestion(concerned, redacted, id)
+	for _, want := range []string{"these 2 clones would still carry you@example.com",
+		"the next push would publish it on GitHub",
+		"JohnStarlight <1+JohnStarlight@users.noreply.github.com>"} {
+		if !strings.Contains(q, want) {
+			t.Errorf("question lacks %q:\n%s", want, q)
+		}
+	}
+	if !yes {
+		t.Error("after redaction the default should be yes")
+	}
+
+	_, yes = commitAsQuestion(concerned[1:], false, id)
+	if yes {
+		t.Error("without redaction the default should be no")
+	}
+}

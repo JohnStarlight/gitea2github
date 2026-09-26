@@ -57,7 +57,24 @@ type Result struct {
 	// on a rewritten history, so that what can be done about them can be
 	// said once, below the table, rather than crammed into a row.
 	AdoptProblems []AdoptProblem
+
+	// CommitName and CommitEmail are who new commits in this clone are made
+	// as now. Changing them is offered for a clone whose pushes will go to
+	// GitHub, when they are not the GitHub identity; see Options.CommitAs.
+	CommitName, CommitEmail string
+
+	// CommitAsSet reports that the clone was set to commit as
+	// Options.CommitAs.
+	CommitAsSet bool
 }
+
+// Identity is a name and address commits are made as.
+type Identity struct {
+	Name, Email string
+}
+
+// String renders it the way git shows an author.
+func (i Identity) String() string { return i.Name + " <" + i.Email + ">" }
 
 // Modes for where a relinked clone should push.
 const (
@@ -129,6 +146,12 @@ type Options struct {
 	// and one of them would otherwise be repointed at the other. A clone
 	// whose repository is missing here falls back to its own name.
 	Targets map[string]string
+
+	// CommitAs, when set, is who new commits are made as in every clone whose
+	// pushes go to GitHub after this run -- set in that clone's own config and
+	// nowhere else. A clone left with the address the migration hid would
+	// publish it with its next push.
+	CommitAs *Identity
 
 	// client replaces the GitHub client Verify would build, so tests can
 	// answer its questions without an account behind them.
@@ -283,6 +306,9 @@ func relinkOne(ctx context.Context, path string, gh *github.Client, opts Options
 		side = APISide{GH: gh, Owner: opts.GitHubUser, Name: target}
 	}
 
+	res.CommitName, _ = gitOutput(ctx, path, "config", "user.name")
+	res.CommitEmail, _ = gitOutput(ctx, path, "config", "user.email")
+
 	if opts.DryRun {
 		res.Action = "planned"
 		if res.Redacted {
@@ -309,6 +335,7 @@ func relinkOne(ctx context.Context, path string, gh *github.Client, opts Options
 			return res
 		}
 		res.Action, res.Reason = "adopted", "took on the rewritten history; Gitea remote removed"
+		setCommitAs(ctx, path, &res, opts)
 		return res
 	}
 
@@ -345,9 +372,29 @@ func relinkOne(ctx context.Context, path string, gh *github.Client, opts Options
 		}
 		opts.Log("relinked %s -> %s", path, res.NewURL)
 		res.Action = "relinked"
+		setCommitAs(ctx, path, &res, opts)
 	}
 
 	return res
+}
+
+// setCommitAs makes new commits in a clone that now pushes to GitHub use the
+// GitHub identity, in that clone's own config only: the user's global config
+// also serves every other repository, Gitea ones included. A failure is
+// reported in the result and does not undo the repointing.
+func setCommitAs(ctx context.Context, path string, res *Result, opts Options) {
+	id := opts.CommitAs
+	if id == nil || (res.CommitName == id.Name && res.CommitEmail == id.Email) {
+		return
+	}
+	for key, value := range map[string]string{"user.name": id.Name, "user.email": id.Email} {
+		if out, err := gitOutput(ctx, path, "config", "--local", key, value); err != nil {
+			res.Reason += fmt.Sprintf("; could not set %s: %v %s", key, err, out)
+			return
+		}
+	}
+	res.CommitAsSet = true
+	res.Reason += "; new commits as " + id.Name
 }
 
 // githubMatch is how the repository on GitHub relates to a clone.
