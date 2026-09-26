@@ -288,7 +288,22 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	if root == "" {
 		root, _ = os.Getwd()
 	}
-	found := findLocalWork(ctx, expandHome(root), *giteaURL, repos, plan, giteaUser, giteaCred.Token)
+	root = expandHome(root)
+	found, copies := findLocalWork(ctx, root, *giteaURL, repos, plan, giteaUser, giteaCred.Token)
+	if copies == 0 && len(plannedIndices(plan)) > 0 {
+		// The copies may simply be elsewhere -- the default is wherever the
+		// command happened to be run from. Somebody at a terminal is asked
+		// where; anybody else is told how to say.
+		switch {
+		case prompt.Interactive() && !*dryRun && !*assumeYes && !given["clones"]:
+			if dir := prompt.Line("Where are your copies? (Enter to skip):", ""); dir != "" {
+				root = expandHome(dir)
+				found, _ = findLocalWork(ctx, root, *giteaURL, repos, plan, giteaUser, giteaCred.Token)
+			}
+		case !given["clones"]:
+			fmt.Println("If your copies are somewhere else, give the directory with --clones <directory>.")
+		}
+	}
 
 	if *dryRun {
 		return nil
@@ -373,8 +388,12 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	// be remembered is the difference between a finished migration and one the
 	// user discovers is unfinished at their next push.
 	if countStatus(results, migrate.StatusMigrated) > 0 {
-		offerRelink(ctx, prompt, expandHome(root), *giteaURL, ghLogin, ghCred.Token, *assumeYes,
-			redactedCount(results, options), relinkTargets(targets, results))
+		var clones map[string][]string
+		if parsed, err := url.Parse(*giteaURL); err == nil {
+			clones, _ = relink.Clones(ctx, root, parsed.Host)
+		}
+		offerRelink(ctx, prompt, root, *giteaURL, ghLogin, ghCred.Token, *assumeYes,
+			migratedCopies(results, options, clones), movedNames(results), relinkTargets(targets, results))
 	}
 
 	// Reported as an error so that a script notices, but only after the
@@ -526,37 +545,42 @@ func planFromProbe(probe []migrate.Result, selected []string, overrides map[stri
 // Only a copy's own commits count, so looking changes nothing. A repository
 // with work in more than one copy is left out rather than guessed about:
 // which copy's work is the one meant is not this tool's decision.
+//
+// copies is how many copies of those repositories were found at all. Zero is
+// not "nothing to report": it means nothing was checked, and is said so,
+// rather than reading as a clean bill of health for copies that are simply
+// somewhere else.
 func findLocalWork(ctx context.Context, root, giteaURL string, repos []gitea.Repo,
-	plan []migrate.Result, giteaUser, giteaToken string) map[string]migrate.LocalWork {
+	plan []migrate.Result, giteaUser, giteaToken string) (found map[string]migrate.LocalWork, copies int) {
 
 	parsed, err := url.Parse(giteaURL)
 	if err != nil {
-		return nil
+		return nil, 0
 	}
-	// Said outright: a directory that is not there would otherwise read as
-	// one that was checked and found to hold nothing.
 	if info, err := os.Stat(root); err != nil || !info.IsDir() {
-		fmt.Printf("There is no directory %s, so your copies were NOT checked for work that is not on Gitea.\n",
+		fmt.Printf("There is no directory %s, so work that is only on your computer was NOT checked.\n",
 			shortenPath(root))
-		return nil
+		return nil, 0
 	}
 	clones, err := relink.Clones(ctx, root, parsed.Host)
 	if err != nil {
-		fmt.Printf("Could not look for your copies under %s: %v\n", shortenPath(root), err)
-		return nil
+		fmt.Printf("Could not look for your copies under %s (%v),\n"+
+			"so work that is only on your computer was NOT checked.\n", shortenPath(root), err)
+		return nil, 0
 	}
 
 	byName := make(map[string]gitea.Repo, len(repos))
 	for _, r := range repos {
 		byName[r.FullName] = r
 	}
-	found := map[string]migrate.LocalWork{}
+	found = map[string]migrate.LocalWork{}
 	var lines []string
 	for _, res := range plan {
 		if res.Status != migrate.StatusPlanned {
 			continue
 		}
 		var withWork []migrate.LocalWork
+		copies += len(clones[strings.ToLower(res.Source)])
 		for _, path := range clones[strings.ToLower(res.Source)] {
 			work, err := migrate.FindLocalWork(ctx, path, byName[res.Source].CloneURL, giteaUser, giteaToken)
 			if err != nil {
@@ -585,19 +609,26 @@ func findLocalWork(ctx context.Context, root, giteaURL string, repos []gitea.Rep
 		}
 	}
 
-	if len(lines) == 0 {
-		fmt.Printf("Checked your copies under %s: nothing there that Gitea does not have.\n", shortenPath(root))
-		return nil
+	switch {
+	case copies == 0:
+		fmt.Printf("None of these repositories has a copy under %s,\n"+
+			"so work that is only on your computer was NOT checked.\n", shortenPath(root))
+		return nil, 0
+	case len(lines) == 0:
+		fmt.Printf("Checked %s under %s: nothing there that Gitea does not have.\n",
+			count(copies, "copy", "copies"), shortenPath(root))
+		return nil, copies
 	}
-	fmt.Printf("Checked your copies under %s. This work is on this computer but NOT on Gitea:\n", shortenPath(root))
+	fmt.Printf("Checked %s under %s. This work is on this computer but NOT on Gitea:\n",
+		count(copies, "copy", "copies"), shortenPath(root))
 	for _, l := range lines {
 		fmt.Println(l)
 	}
 	fmt.Println()
 	if len(found) == 0 {
-		return nil
+		return nil, copies
 	}
-	return found
+	return found, copies
 }
 
 // sendLocalWork pushes the work taken from each copy to Gitea as well. A
@@ -638,21 +669,39 @@ func relinkTargets(targets map[string]string, results []migrate.Result) map[stri
 	return out
 }
 
-// redactedCount is how many of the repositories that moved had their history
-// rewritten.
-//
-// It decides how hard the offer that follows presses. A migration that copied
-// histories verbatim leaves clones that still work; one that rewrote them
-// leaves clones that cannot push to what was just created, and saying so is
-// worth more than a tidy default.
-func redactedCount(results []migrate.Result, opts migrate.Options) int {
-	n := 0
+// movedNames is the repositories that moved in this run, by Gitea full name.
+func movedNames(results []migrate.Result) []string {
+	var out []string
 	for _, r := range results {
-		if r.Status == migrate.StatusMigrated && opts.Redacts(r.Source) {
-			n++
+		if r.Status == migrate.StatusMigrated {
+			out = append(out, r.Source)
 		}
 	}
-	return n
+	return out
+}
+
+// migratedCopy is a copy on this computer of a repository that just moved.
+type migratedCopy struct {
+	Path, Source string
+	Redacted     bool // its history was rewritten, so the copy cannot push to it
+}
+
+// migratedCopies is the copies found of the repositories that moved in this
+// run, and whether each one's history was rewritten. It is what the offer to
+// repoint afterwards is about: those copies and no others, named.
+//
+// clones is what relink.Clones found, keyed by Gitea full name in lower case.
+func migratedCopies(results []migrate.Result, opts migrate.Options, clones map[string][]string) []migratedCopy {
+	var out []migratedCopy
+	for _, r := range results {
+		if r.Status != migrate.StatusMigrated {
+			continue
+		}
+		for _, path := range clones[strings.ToLower(r.Source)] {
+			out = append(out, migratedCopy{Path: path, Source: r.Source, Redacted: opts.Redacts(r.Source)})
+		}
+	}
+	return out
 }
 
 // printResults renders the per-repository outcome table and the tally beneath

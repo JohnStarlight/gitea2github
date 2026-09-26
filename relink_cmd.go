@@ -279,52 +279,86 @@ func giteaTargets(ctx context.Context, giteaURL string) (map[string]string, erro
 // succeeded by this point, and a directory that cannot be scanned is a reason
 // to say so and stop, not to report the whole run as failed.
 func offerRelink(ctx context.Context, prompt *ui.Prompter, clonesRoot, giteaURL, ghLogin, ghToken string,
-	assumeYes bool, redacted int, targets map[string]string) {
+	assumeYes bool, copies []migratedCopy, moved []string, targets map[string]string) {
+
+	// Only copies that were found are talked about. The offer used to be made
+	// whenever a history had been rewritten, asserting that "the clones on
+	// this machine" held the original -- whether or not there were any.
+	if len(copies) == 0 {
+		what := "the migrated repositories"
+		if len(moved) == 1 {
+			what = moved[0]
+		}
+		fmt.Printf("\nNo copy of %s under %s. If you have one elsewhere:\n"+
+			"  gitea2github relink <directory>\n", what, shortenPath(clonesRoot))
+		return
+	}
+
+	var rewritten, plain []migratedCopy
+	for _, c := range copies {
+		if c.Redacted {
+			rewritten = append(rewritten, c)
+		} else {
+			plain = append(plain, c)
+		}
+	}
+	list := func(cs []migratedCopy) {
+		for _, c := range cs {
+			fmt.Printf("  %s  (%s)\n", shortenPath(c.Path), c.Source)
+		}
+	}
+	if len(rewritten) > 0 {
+		if len(rewritten) == 1 {
+			fmt.Printf("\nThis copy on your computer holds the original history of %s,\n"+
+				"which was rewritten. It can no longer push to GitHub:\n", rewritten[0].Source)
+		} else {
+			fmt.Printf("\nThese %d copies on your computer hold original histories that were\n"+
+				"rewritten. They can no longer push to GitHub:\n", len(rewritten))
+		}
+		list(rewritten)
+	}
+	if len(plain) > 0 {
+		fmt.Printf("\n%s on your computer still %s to Gitea:\n",
+			map[bool]string{true: "This copy", false: fmt.Sprintf("These %d copies", len(plain))}[len(plain) == 1],
+			map[bool]string{true: "pushes", false: "push"}[len(plain) == 1])
+		list(plain)
+	}
+
 	// Never without being asked. Repointing rewrites remotes in directories
 	// the migration never touched, so --yes, which is consent to the migration
 	// that was described, is not consent to this.
 	if !prompt.Interactive() || assumeYes {
-		if redacted > 0 {
-			fmt.Printf("\n%s rewritten, so the clones on this machine can no longer push to "+
-				"GitHub: what is there now is different commits.\n"+
-				"Run `gitea2github relink .` to have them take the rewritten history on.\n",
-				count(redacted, "history was", "histories were"))
-			return
-		}
-		fmt.Println("\nYour local clones still push to Gitea. Run `gitea2github relink .` to repoint them.")
+		fmt.Printf("Run `gitea2github relink %s` to repoint %s.\n",
+			shortenPath(clonesRoot), map[bool]string{true: "it", false: "them"}[len(copies) == 1])
 		return
 	}
 
-	// The directory the migration looked in for work not yet on Gitea: the
-	// copies found there are the ones to repoint.
-	cwd := clonesRoot
-
-	// A migration that copied histories verbatim leaves clones that still
-	// work, so repointing them is tidying and the default is no. One that
-	// rewrote them leaves clones that cannot push to what was just created,
-	// which is not tidying and should not be stumbled past.
-	// Not "to GitHub": the screen behind this question offers Gitea and both
-	// as well, and naming one of the three here prejudges a choice that is
-	// better made with the list in front of you.
-	question := fmt.Sprintf("\nRepoint the clones under %s?", shortenPath(cwd))
-	def := false
-	if redacted > 0 {
-		fmt.Printf("\n%s rewritten. The clones on this machine still hold the original,\n"+
-			"so they can no longer push to GitHub: what is there now is different commits.\n",
-			count(redacted, "history was", "histories were"))
-		question = fmt.Sprintf("Have the clones under %s take on the rewritten history?",
-			shortenPath(cwd))
-		def = true
+	// Copies that cannot push to what was just created are not tidying, and
+	// the answer defaults to yes; copies that still work are, and it
+	// defaults to no.
+	question, def := "Repoint them?", false
+	switch {
+	case len(rewritten) > 0 && len(plain) == 0:
+		question, def = "Take on the rewritten history?", true
+	case len(rewritten) > 0:
+		question, def = "Open the repointing screen for them?", true
+	case len(plain) == 1:
+		question = "Repoint it?"
 	}
 	if !prompt.Confirm(question, def) {
-		if redacted > 0 {
-			fmt.Println("Left alone. Those clones cannot push to GitHub until they take the " +
+		if len(rewritten) > 0 {
+			fmt.Println("Left alone. Those copies cannot push to GitHub until they take the " +
 				"rewritten history on -- `gitea2github relink` when you are ready. " +
 				"Pushing to Gitea still works.")
 			return
 		}
 		fmt.Println("Left alone. Run `gitea2github relink <directory>` whenever you want to.")
 		return
+	}
+	cwd := clonesRoot
+	ours := map[string]bool{}
+	for _, c := range copies {
+		ours[c.Path] = true
 	}
 
 	parsed, err := url.Parse(giteaURL)
@@ -342,9 +376,17 @@ func offerRelink(ctx context.Context, prompt *ui.Prompter, clonesRoot, giteaURL,
 		fmt.Printf("  could not scan %s: %v\n", shortenPath(cwd), err)
 		return
 	}
+	// The screen shows the copies the question named, not everything else
+	// that happens to live in the same directory.
+	var named []relink.Result
+	for _, r := range probe {
+		if ours[r.Path] {
+			named = append(named, r)
+		}
+	}
+	probe = named
 	if len(probe) == 0 {
-		fmt.Printf("  no git working copies under %s.\n", shortenPath(cwd))
-		fmt.Println("  Run `gitea2github relink <directory>` against the folder that holds your clones.")
+		fmt.Printf("  the copies under %s could not be read again.\n", shortenPath(cwd))
 		return
 	}
 

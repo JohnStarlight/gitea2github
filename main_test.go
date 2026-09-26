@@ -259,38 +259,37 @@ func TestAskExclusionsNeverBlocksWithoutATerminal(t *testing.T) {
 	}
 }
 
-// TestRedactedCountOnlyCountsWhatMoved decides how hard the offer after a
-// migration presses. A run that copied histories verbatim leaves clones that
-// still work; one that rewrote them leaves clones that cannot push to what was
-// just created.
-func TestRedactedCountOnlyCountsWhatMoved(t *testing.T) {
+// TestMigratedCopiesAreTheOnesThatMoved decides what the offer after a
+// migration talks about: copies found of repositories that moved in this run,
+// each marked rewritten only when it was. A repository left untouched on
+// GitHub has a copy that still matches it, and is not offered.
+func TestMigratedCopiesAreTheOnesThatMoved(t *testing.T) {
 	results := []migrate.Result{
 		{Source: "me/moved-and-redacted", Status: migrate.StatusMigrated},
 		{Source: "me/moved-plain", Status: migrate.StatusMigrated},
 		{Source: "me/already-there", Status: migrate.StatusExists},
-		{Source: "me/skipped", Status: migrate.StatusSkipped},
+		{Source: "me/no-copy", Status: migrate.StatusMigrated},
+	}
+	clones := map[string][]string{
+		"me/moved-and-redacted": {"/c/a"},
+		"me/moved-plain":        {"/c/b"},
+		"me/already-there":      {"/c/c"},
 	}
 	opts := migrate.Options{
 		Mapper:     redact.NewMapper(nil, ""),
 		RedactOnly: map[string]bool{"me/moved-and-redacted": true, "me/already-there": true},
 	}
-
-	// Only the one that both moved and was rewritten counts: a repository left
-	// untouched on GitHub has a clone that still matches it.
-	if got := redactedCount(results, opts); got != 1 {
-		t.Errorf("redactedCount = %d, want 1", got)
+	got := migratedCopies(results, opts, clones)
+	want := []migratedCopy{{"/c/a", "me/moved-and-redacted", true}, {"/c/b", "me/moved-plain", false}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("migratedCopies = %+v, want %+v", got, want)
 	}
 
 	// With no Mapper nothing was rewritten, whatever RedactOnly says.
-	if got := redactedCount(results, migrate.Options{RedactOnly: opts.RedactOnly}); got != 0 {
-		t.Errorf("redactedCount without a Mapper = %d, want 0", got)
-	}
-
-	// A nil RedactOnly with a Mapper means every repository, which is what
-	// --redact-emails on the command line asks for.
-	all := migrate.Options{Mapper: redact.NewMapper(nil, "")}
-	if got := redactedCount(results, all); got != 2 {
-		t.Errorf("redactedCount with everything redacted = %d, want 2", got)
+	for _, c := range migratedCopies(results, migrate.Options{RedactOnly: opts.RedactOnly}, clones) {
+		if c.Redacted {
+			t.Errorf("%s marked rewritten without a Mapper", c.Source)
+		}
 	}
 }
 

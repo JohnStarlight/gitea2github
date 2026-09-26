@@ -519,3 +519,97 @@ func TestListShowsWhoseEachRepositoryIs(t *testing.T) {
 		}
 	}
 }
+
+// TestMigrateFromWhereThereAreNoCopies is the run that was reported: migrate
+// started from a directory holding no copy of anything being migrated. It
+// must say that nothing was checked, and must not go on to talk about "the
+// clones on this machine" -- there are none -- let alone ask to rewrite them.
+func TestMigrateFromWhereThereAreNoCopies(t *testing.T) {
+	w := newWorld(t)
+	w.giteaRepo("me", "ascii-art", true, personal, map[string]string{"main.go": "package main\n"})
+	empty := t.TempDir()
+
+	out, err := run(t, "", cmdMigrate, "--gitea-url", w.giteaURL, "--clones", empty,
+		"--yes", "--redact-emails")
+	if err != nil {
+		t.Fatalf("migrate: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"None of these repositories has a copy under",
+		"work that is only on your computer was NOT checked",
+		"No copy of me/ascii-art under",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	for _, never := range []string{"nothing there that Gitea does not have", "can no longer push to GitHub", "clones on this machine"} {
+		if strings.Contains(out, never) {
+			t.Errorf("output claims %q about copies that do not exist:\n%s", never, out)
+		}
+	}
+}
+
+// TestSkippingTheDirectoryQuestionAsksNothingAboutCopies is the same run at a
+// terminal, pressing Enter when asked where the copies are. The migration goes
+// ahead, and nothing afterwards asks about copies that were never found.
+func TestSkippingTheDirectoryQuestionAsksNothingAboutCopies(t *testing.T) {
+	w := newWorld(t)
+	w.giteaRepo("me", "ascii-art", true, personal, map[string]string{"main.go": "package main\n"})
+	t.Chdir(t.TempDir()) // started from a directory with no copies
+
+	answers := strings.Join([]string{
+		"y",      // replace email addresses
+		personal, // an address of yours
+		"",       // where are your copies? -- skipped
+		"",       // visibility: keep
+		"y",      // migrate
+	}, "\n") + "\n"
+	out, err := run(t, answers, cmdMigrate, "--gitea-url", w.giteaURL, "--no-tui")
+	if err != nil {
+		t.Fatalf("migrate: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "1 migrated") || !strings.Contains(out, "No copy of me/ascii-art under") {
+		t.Errorf("output:\n%s", out)
+	}
+	if strings.Contains(out, "can no longer push to GitHub") {
+		t.Errorf("offered to repoint copies that were never found:\n%s", out)
+	}
+}
+
+// TestNamingTheDirectoryFindsTheCopies: answering the question with where the
+// copies are finds the work in them, and the offer afterwards names the copy.
+func TestNamingTheDirectoryFindsTheCopies(t *testing.T) {
+	w := newWorld(t)
+	w.giteaRepo("me", "ascii-art", true, personal, map[string]string{"main.go": "package main\n"})
+	copyOnDisk := w.clone("me", "ascii-art")
+	w.commit(copyOnDisk, personal, map[string]string{"extra.go": "package main // last touches\n"})
+	t.Chdir(t.TempDir())
+
+	answers := strings.Join([]string{
+		"y",      // replace email addresses
+		personal, // an address of yours
+		w.clones, // where are your copies?
+		"",       // visibility: keep
+		"y",      // put the work on this computer on GitHub too
+		"n",      // not on Gitea
+		"y",      // migrate
+		"n",      // do not take on the rewritten history now
+	}, "\n") + "\n"
+	out, err := run(t, answers, cmdMigrate, "--gitea-url", w.giteaURL, "--no-tui")
+	if err != nil {
+		t.Fatalf("migrate: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"This work is on this computer but NOT on Gitea",
+		"This copy on your computer holds the original history of me/ascii-art",
+		copyOnDisk,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if files := w.git(w.gh.bare("ascii-art"), personal, "ls-tree", "--name-only", "main"); !strings.Contains(files, "extra.go") {
+		t.Errorf("the work found in the named directory did not reach GitHub: %s", files)
+	}
+}

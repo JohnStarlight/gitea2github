@@ -358,17 +358,21 @@ that GitHub lacks cannot be added to a redacted copy afterwards, which is why
 `migrate` takes [the work on your computer](#work-that-is-only-on-your-computer)
 along in the first place.
 
-A migration that redacted anything says so before offering, and offers with the
-answer already yes:
+After a migration, the offer to repoint is about the copies it actually found
+of the repositories that moved — named, and no others. When a history was
+rewritten, the answer defaults to yes:
 
 ```
-2 histories were rewritten. The clones on this machine still hold the original,
-so they can no longer push to GitHub: what is there now is different commits.
-Have the clones under ~/Git take on the rewritten history? [Y/n]
+This copy on your computer holds the original history of JohnStarlight/ascii-art,
+which was rewritten. It can no longer push to GitHub:
+  ~/Git/ascii-art  (JohnStarlight/ascii-art)
+Take on the rewritten history? [Y/n]
 ```
 
-Declining is fine and says what it costs. A migration that rewrote nothing asks
-the tidier question it always did, with the answer still no.
+Declining is fine and says what it costs. Copies of repositories that moved
+without a rewrite still work, and for them the answer defaults to no. When no
+copy was found, nothing is asked; the run says so and how to repoint copies
+kept elsewhere.
 
 ## Redacting email addresses
 
@@ -466,12 +470,21 @@ asks you to confirm, `migrate` looks through your copies of the repositories
 have that Gitea does not:
 
 ```
-Checked your copies under ~/Git. This work is on this computer but NOT on Gitea:
+Checked 4 copies under ~/Git. This work is on this computer but NOT on Gitea:
   JohnStarlight/ascii-art  (~/Git/ascii-art)
       main: 1 commit; experiment: new branch, 2 commits; tag v2
 
 Put this work on GitHub too? [Y/n]
 Also send it to Gitea? [y/N]
+```
+
+If there is no copy of any of them where it looked, it says that nothing was
+checked — not that nothing was found — and asks where they are:
+
+```
+None of these repositories has a copy under ~/Git/gitea2github,
+so work that is only on your computer was NOT checked.
+Where are your copies? (Enter to skip): ~/Git
 ```
 
 Taken, it goes through the same redaction as everything else. Your copy is
