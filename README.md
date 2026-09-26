@@ -1,5 +1,7 @@
 # gitea2github
 
+[![CI](https://github.com/JohnStarlight/gitea2github/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/JohnStarlight/gitea2github/actions/workflows/ci.yml)
+
 Move your repositories from a Gitea instance to GitHub — **with every branch and
 tag intact** — and repoint your local clones at the new home.
 
