@@ -464,13 +464,14 @@ and `.invalid`, no-reply addresses, and the `git@github.com` of a clone URL.
 ## Work that is only on your computer
 
 The migration copies from Gitea, so a commit you made after your last push —
-the last touches to a finished project — would not reach GitHub. Before it
-asks you to confirm, `migrate` looks through your copies of the repositories
-(in the current directory, or wherever `--clones` points) and says what they
-have that Gitea does not:
+the last touches to a finished project — would not reach GitHub. So the first
+thing `migrate` does, before anything is chosen, is look for your copies of the
+repositories (in the current directory, or wherever `--clones` points) and say
+what they have that Gitea does not:
 
 ```
-Checked 4 copies under ~/Git. This work is on this computer but NOT on Gitea:
+Found 4 copies of these repositories under ~/Git.
+This work is on this computer but NOT on Gitea:
   JohnStarlight/ascii-art  (~/Git/ascii-art)
       main: 1 commit; experiment: new branch, 2 commits; tag v2
 
@@ -478,17 +479,22 @@ Put this work on GitHub too? [Y/n]
 Also send it to Gitea? [y/N]
 ```
 
-If there is no copy of any of them where it looked, it says that nothing was
-checked — not that nothing was found — and asks where they are:
+If there is no copy of any of them where it looked, it says that nothing will
+be checked — not that nothing was found — and asks where they are:
 
 ```
 None of these repositories has a copy under ~/Git/gitea2github,
-so work that is only on your computer was NOT checked.
+so work that is only on your computer will NOT be checked.
 Where are your copies? (Enter to skip): ~/Git
 ```
 
 Taken, it goes through the same redaction as everything else. Your copy is
-only read, never changed. Two things are left out and say so: a branch where
+only read, never changed.
+
+The copies save a download, too. What a copy already holds is taken from it,
+and only what it lacks comes from Gitea — usually nothing. Gitea still decides
+which branches and tags there are, so a teammate's push your copy never
+fetched arrives all the same. Two things are left out and say so: a branch where
 Gitea also has commits your copy lacks, since taking one side would lose the
 other; and a repository with work in more than one copy, since which one is
 meant is yours to say.

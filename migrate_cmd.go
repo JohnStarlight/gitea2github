@@ -120,6 +120,40 @@ func cmdMigrate(ctx context.Context, args []string) error {
 
 	fmt.Printf("%s -> github.com/%s  (%d repositories visible)\n", forDisplay(*giteaURL), ghLogin, len(repos))
 
+	// Copies on this computer are looked for first, before anything else is
+	// decided. What they have that Gitea does not is work that would
+	// otherwise be missing from GitHub -- and, once a history is redacted,
+	// missing for good. And what they have that Gitea does too need not be
+	// downloaded again: the migration takes it from them.
+	root := *clonesDir
+	if root == "" {
+		root, _ = os.Getwd()
+	}
+	root = expandHome(root)
+	fmt.Println()
+	copiesOf, copies := findCopies(ctx, root, *giteaURL, repos)
+	if copies == 0 {
+		// The copies may simply be elsewhere -- the default is wherever the
+		// command happened to be run from. Somebody at a terminal is asked
+		// where; anybody else is told how to say.
+		switch {
+		case prompt.Interactive() && !*dryRun && !*assumeYes && !given["clones"]:
+			if dir := prompt.Line("Where are your copies? (Enter to skip):", ""); dir != "" {
+				root = expandHome(dir)
+				copiesOf, _ = findCopies(ctx, root, *giteaURL, repos)
+			}
+		case !given["clones"]:
+			fmt.Println("If your copies are somewhere else, give the directory with --clones <directory>.")
+		}
+	}
+	allWork := findLocalWork(ctx, copiesOf, repos, giteaUser, giteaCred.Token)
+	reuse := map[string]string{}
+	for _, r := range repos {
+		if paths := copiesOf[strings.ToLower(r.FullName)]; len(paths) > 0 {
+			reuse[r.FullName] = paths[0]
+		}
+	}
+
 	// Two routes to the same set of answers. The full-screen selector is the
 	// good one -- nothing is decided until the whole picture is on screen, so
 	// changing your mind about the forks after reading the plan costs a
@@ -263,6 +297,7 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		Target:                targets,
 		RenameTo:              renames,
 		AllowEmailsInFiles:    *allowFileEmails,
+		Copies:                reuse,
 		Topics: func(ctx context.Context, r gitea.Repo) ([]string, error) {
 			return client.Topics(ctx, r.Owner.Login, r.Name)
 		},
@@ -281,28 +316,15 @@ func cmdMigrate(ctx context.Context, args []string) error {
 
 	printResults(plan)
 
-	// Work in the copies on this computer that Gitea does not have. The
-	// migration copies from Gitea, so without this it would be missing from
-	// GitHub -- and, once a history is redacted, missing for good.
-	root := *clonesDir
-	if root == "" {
-		root, _ = os.Getwd()
-	}
-	root = expandHome(root)
-	found, copies := findLocalWork(ctx, root, *giteaURL, repos, plan, giteaUser, giteaCred.Token)
-	if copies == 0 && len(plannedIndices(plan)) > 0 {
-		// The copies may simply be elsewhere -- the default is wherever the
-		// command happened to be run from. Somebody at a terminal is asked
-		// where; anybody else is told how to say.
-		switch {
-		case prompt.Interactive() && !*dryRun && !*assumeYes && !given["clones"]:
-			if dir := prompt.Line("Where are your copies? (Enter to skip):", ""); dir != "" {
-				root = expandHome(dir)
-				found, _ = findLocalWork(ctx, root, *giteaURL, repos, plan, giteaUser, giteaCred.Token)
-			}
-		case !given["clones"]:
-			fmt.Println("If your copies are somewhere else, give the directory with --clones <directory>.")
+	// The work found at the start, narrowed to what is being migrated.
+	found := map[string]migrate.LocalWork{}
+	for _, r := range plan {
+		if work, ok := allWork[r.Source]; ok && r.Status == migrate.StatusPlanned {
+			found[r.Source] = work
 		}
+	}
+	if len(found) == 0 {
+		found = nil
 	}
 
 	if *dryRun {
@@ -337,6 +359,17 @@ func cmdMigrate(ctx context.Context, args []string) error {
 	// answer defaults to yes; sending it to Gitea sends something somewhere,
 	// so that one defaults to no.
 	takeLocal, sendLocal := *localWork == "include", *pushLocal
+	if len(found) > 0 {
+		// Found at the start, for every repository; asked about here, for
+		// the ones being migrated, which may be fewer.
+		var names []string
+		for _, r := range plan {
+			if _, ok := found[r.Source]; ok {
+				names = append(names, r.Source)
+			}
+		}
+		fmt.Printf("\nWork on this computer, NOT on Gitea, in: %s\n", strings.Join(names, ", "))
+	}
 	if len(found) > 0 && prompt.Interactive() && !*assumeYes {
 		if !given["local-work"] {
 			takeLocal = prompt.Confirm("Put this work on GitHub too?", true)
@@ -539,53 +572,64 @@ func planFromProbe(probe []migrate.Result, selected []string, overrides map[stri
 	return plan
 }
 
-// findLocalWork looks through the copies under root for work that Gitea does
-// not have, in the repositories about to be migrated, and says what it found.
+// findCopies looks under root for copies of these repositories, keyed by
+// Gitea full name in lower case, and says how many it found.
 //
-// Only a copy's own commits count, so looking changes nothing. A repository
-// with work in more than one copy is left out rather than guessed about:
-// which copy's work is the one meant is not this tool's decision.
-//
-// copies is how many copies of those repositories were found at all. Zero is
-// not "nothing to report": it means nothing was checked, and is said so,
-// rather than reading as a clean bill of health for copies that are simply
-// somewhere else.
-func findLocalWork(ctx context.Context, root, giteaURL string, repos []gitea.Repo,
-	plan []migrate.Result, giteaUser, giteaToken string) (found map[string]migrate.LocalWork, copies int) {
-
+// None found is not "nothing to report": it means nothing on this computer
+// can be checked, and is said so, rather than reading as a clean bill of
+// health for copies that are simply somewhere else.
+func findCopies(ctx context.Context, root, giteaURL string, repos []gitea.Repo) (map[string][]string, int) {
 	parsed, err := url.Parse(giteaURL)
 	if err != nil {
 		return nil, 0
 	}
 	if info, err := os.Stat(root); err != nil || !info.IsDir() {
-		fmt.Printf("There is no directory %s, so work that is only on your computer was NOT checked.\n",
+		fmt.Printf("There is no directory %s, so work that is only on your computer will NOT be checked.\n",
 			shortenPath(root))
 		return nil, 0
 	}
-	clones, err := relink.Clones(ctx, root, parsed.Host)
+	all, err := relink.Clones(ctx, root, parsed.Host)
 	if err != nil {
 		fmt.Printf("Could not look for your copies under %s (%v),\n"+
-			"so work that is only on your computer was NOT checked.\n", shortenPath(root), err)
+			"so work that is only on your computer will NOT be checked.\n", shortenPath(root), err)
 		return nil, 0
 	}
-
-	byName := make(map[string]gitea.Repo, len(repos))
+	ours := map[string][]string{}
+	copies := 0
 	for _, r := range repos {
-		byName[r.FullName] = r
-	}
-	found = map[string]migrate.LocalWork{}
-	var lines []string
-	for _, res := range plan {
-		if res.Status != migrate.StatusPlanned {
-			continue
+		key := strings.ToLower(r.FullName)
+		if paths := all[key]; len(paths) > 0 {
+			ours[key] = paths
+			copies += len(paths)
 		}
+	}
+	if copies == 0 {
+		fmt.Printf("None of these repositories has a copy under %s,\n"+
+			"so work that is only on your computer will NOT be checked.\n", shortenPath(root))
+		return nil, 0
+	}
+	fmt.Printf("Found %s of these repositories under %s.\n", count(copies, "copy", "copies"), shortenPath(root))
+	return ours, copies
+}
+
+// findLocalWork compares each copy found with Gitea and says what work they
+// hold that Gitea does not, keyed by Gitea full name.
+//
+// Only a copy's own commits count, so looking changes nothing. A repository
+// with work in more than one copy is left out rather than guessed about:
+// which copy's work is the one meant is not this tool's decision.
+func findLocalWork(ctx context.Context, copiesOf map[string][]string, repos []gitea.Repo,
+	giteaUser, giteaToken string) map[string]migrate.LocalWork {
+
+	found := map[string]migrate.LocalWork{}
+	var lines []string
+	for _, r := range repos {
 		var withWork []migrate.LocalWork
-		copies += len(clones[strings.ToLower(res.Source)])
-		for _, path := range clones[strings.ToLower(res.Source)] {
-			work, err := migrate.FindLocalWork(ctx, path, byName[res.Source].CloneURL, giteaUser, giteaToken)
+		for _, path := range copiesOf[strings.ToLower(r.FullName)] {
+			work, err := migrate.FindLocalWork(ctx, path, r.CloneURL, giteaUser, giteaToken)
 			if err != nil {
 				lines = append(lines, fmt.Sprintf("  %s  (%s)\n      could not compare with Gitea: %v",
-					res.Source, shortenPath(path), err))
+					r.FullName, shortenPath(path), err))
 				continue
 			}
 			if !work.Empty() {
@@ -595,9 +639,9 @@ func findLocalWork(ctx context.Context, root, giteaURL string, repos []gitea.Rep
 		switch len(withWork) {
 		case 0:
 		case 1:
-			found[res.Source] = withWork[0]
+			found[r.FullName] = withWork[0]
 			lines = append(lines, fmt.Sprintf("  %s  (%s)\n      %s",
-				res.Source, shortenPath(withWork[0].Clone), withWork[0].Describe()))
+				r.FullName, shortenPath(withWork[0].Clone), withWork[0].Describe()))
 		default:
 			var paths []string
 			for _, w := range withWork {
@@ -605,30 +649,22 @@ func findLocalWork(ctx context.Context, root, giteaURL string, repos []gitea.Rep
 			}
 			lines = append(lines, fmt.Sprintf("  %s\n      %d copies have work Gitea lacks (%s); NOT included.\n"+
 				"      Put it all in one copy, then run migrate again.",
-				res.Source, len(withWork), strings.Join(paths, ", ")))
+				r.FullName, len(withWork), strings.Join(paths, ", ")))
 		}
 	}
-
-	switch {
-	case copies == 0:
-		fmt.Printf("None of these repositories has a copy under %s,\n"+
-			"so work that is only on your computer was NOT checked.\n", shortenPath(root))
-		return nil, 0
-	case len(lines) == 0:
-		fmt.Printf("Checked %s under %s: nothing there that Gitea does not have.\n",
-			count(copies, "copy", "copies"), shortenPath(root))
-		return nil, copies
+	if len(copiesOf) == 0 {
+		return nil
 	}
-	fmt.Printf("Checked %s under %s. This work is on this computer but NOT on Gitea:\n",
-		count(copies, "copy", "copies"), shortenPath(root))
+	if len(lines) == 0 {
+		fmt.Println("None of them has work that is not on Gitea.")
+		return nil
+	}
+	fmt.Println("This work is on this computer but NOT on Gitea:")
 	for _, l := range lines {
 		fmt.Println(l)
 	}
 	fmt.Println()
-	if len(found) == 0 {
-		return nil, copies
-	}
-	return found, copies
+	return found
 }
 
 // sendLocalWork pushes the work taken from each copy to Gitea as well. A

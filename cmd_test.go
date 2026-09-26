@@ -314,18 +314,54 @@ func (f *fakeGitHubAPI) repo(name string) map[string]any {
 
 // run runs a command the way main does, with the answers given to its
 // questions, and returns what it printed and the error it ended with.
+//
+// The answers are strict: a question asked with no answer left, or an answer
+// left over at the end, fails the test. Otherwise answers that have drifted
+// out of step with the questions -- because a question was added or moved --
+// can pass by accident, each landing on a question it was not meant for.
 func run(t *testing.T, answers string, cmd func(context.Context, []string) error, args ...string) (string, error) {
 	t.Helper()
 	interactive := answers != ""
-	saved := newPrompter
-	newPrompter = func() *ui.Prompter {
-		return ui.NewWith(strings.NewReader(answers), io.Discard, interactive)
+	script := &scriptedAnswers{}
+	if interactive {
+		script.lines = strings.SplitAfter(strings.TrimSuffix(answers, "\n")+"\n", "\n")
+		script.lines = script.lines[:len(script.lines)-1] // SplitAfter leaves a final ""
 	}
+	saved := newPrompter
+	newPrompter = func() *ui.Prompter { return ui.NewWith(script, io.Discard, interactive) }
 	defer func() { newPrompter = saved }()
 
 	var err error
 	out := captureStdout(t, func() { err = cmd(context.Background(), args) })
+	if script.exhausted {
+		t.Errorf("a question was asked with no answer left for it\n%s", out)
+	}
+	if len(script.lines) > 0 {
+		t.Errorf("answers never asked for: %q\n%s", script.lines, out)
+	}
 	return out, err
+}
+
+// scriptedAnswers hands a prompter one answer per read, so that answers not
+// yet asked for stay here, where the test can see them, rather than in the
+// prompter's buffer.
+type scriptedAnswers struct {
+	lines     []string
+	exhausted bool
+}
+
+func (s *scriptedAnswers) Read(p []byte) (int, error) {
+	if len(s.lines) == 0 {
+		s.exhausted = true
+		return 0, io.EOF
+	}
+	n := copy(p, s.lines[0])
+	if n < len(s.lines[0]) {
+		s.lines[0] = s.lines[0][n:]
+	} else {
+		s.lines = s.lines[1:]
+	}
+	return n, nil
 }
 
 // authors lists who made the commits in a repository.
@@ -536,7 +572,7 @@ func TestMigrateFromWhereThereAreNoCopies(t *testing.T) {
 	}
 	for _, want := range []string{
 		"None of these repositories has a copy under",
-		"work that is only on your computer was NOT checked",
+		"work that is only on your computer will NOT be checked",
 		"No copy of me/ascii-art under",
 	} {
 		if !strings.Contains(out, want) {
@@ -559,9 +595,9 @@ func TestSkippingTheDirectoryQuestionAsksNothingAboutCopies(t *testing.T) {
 	t.Chdir(t.TempDir()) // started from a directory with no copies
 
 	answers := strings.Join([]string{
+		"",       // where are your copies? -- skipped; asked first
 		"y",      // replace email addresses
 		personal, // an address of yours
-		"",       // where are your copies? -- skipped
 		"",       // visibility: keep
 		"y",      // migrate
 	}, "\n") + "\n"
@@ -575,6 +611,11 @@ func TestSkippingTheDirectoryQuestionAsksNothingAboutCopies(t *testing.T) {
 	if strings.Contains(out, "can no longer push to GitHub") {
 		t.Errorf("offered to repoint copies that were never found:\n%s", out)
 	}
+	// The answers reached the questions they were meant for: redaction was
+	// asked for, so the address must not have reached GitHub.
+	if got := w.authors(w.gh.bare("ascii-art")); got != testNoReply {
+		t.Errorf("GitHub's history is by %q; the answer to redact did not land", got)
+	}
 }
 
 // TestNamingTheDirectoryFindsTheCopies: answering the question with where the
@@ -587,9 +628,9 @@ func TestNamingTheDirectoryFindsTheCopies(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	answers := strings.Join([]string{
+		w.clones, // where are your copies? -- asked first
 		"y",      // replace email addresses
 		personal, // an address of yours
-		w.clones, // where are your copies?
 		"",       // visibility: keep
 		"y",      // put the work on this computer on GitHub too
 		"n",      // not on Gitea
@@ -611,5 +652,8 @@ func TestNamingTheDirectoryFindsTheCopies(t *testing.T) {
 	}
 	if files := w.git(w.gh.bare("ascii-art"), personal, "ls-tree", "--name-only", "main"); !strings.Contains(files, "extra.go") {
 		t.Errorf("the work found in the named directory did not reach GitHub: %s", files)
+	}
+	if got := w.authors(w.gh.bare("ascii-art")); got != testNoReply+"\n"+testNoReply {
+		t.Errorf("GitHub's history is by %q; the answer to redact did not land", got)
 	}
 }

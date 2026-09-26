@@ -2,6 +2,7 @@ package migrate
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -146,5 +147,50 @@ func TestPushLocalWorkSendsItToGitea(t *testing.T) {
 	}
 	if !again.Empty() {
 		t.Errorf("after pushing, Gitea still lacks: %s", again.Describe())
+	}
+}
+
+// TestACopyIsReusedWithoutMissingWhatGiteaHas: taking objects from a copy on
+// this computer saves downloading them, but Gitea still decides what there
+// is. A teammate's push the copy never fetched must reach GitHub all the
+// same; and a "copy" git cannot borrow from costs only the saving.
+func TestACopyIsReusedWithoutMissingWhatGiteaHas(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		copyOf func(s resumeScene, work string) string
+	}{
+		{"a real copy", func(_ resumeScene, work string) string { return work }},
+		{"not a repository", func(s resumeScene, _ string) string { return filepath.Dir(s.gitea) }},
+	} {
+		s, work := localScene(t)
+
+		// A teammate pushes after this copy last fetched.
+		other := filepath.Join(filepath.Dir(s.gitea), "teammate-"+strings.ReplaceAll(c.name, " ", "-"))
+		s.git(filepath.Dir(s.gitea), "clone", "-q", "-b", "main", s.gitea, other)
+		if err := os.WriteFile(filepath.Join(other, "theirs.txt"), []byte("theirs\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		s.git(other, "add", ".")
+		s.git(other, "commit", "-qm", "teammate's work")
+		s.git(other, "push", "-q", "origin", "main")
+
+		var logged []string
+		f := &fakeGitHub{exists: false}
+		f.scene = s
+		res := Run(context.Background(), []gitea.Repo{s.repo(true)}, Options{
+			GiteaUser: "me", GitHubUser: "me", GitHubTok: "t0ken-for-tests", Concurrency: 1,
+			Copies: map[string]string{"me/demo": c.copyOf(s, work)},
+			Log:    func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) },
+			GitHub: newTestClient(f),
+		})[0]
+		if res.Status != StatusMigrated {
+			t.Fatalf("%s: %s: %s", c.name, res.Status, res.Reason)
+		}
+		if want, have := s.refs(s.gitea), s.refs(s.github); have != want {
+			t.Errorf("%s: GitHub holds\n%s\nwant everything Gitea has:\n%s", c.name, have, want)
+		}
+		if !strings.Contains(strings.Join(logged, "\n"), "taking what it can from") {
+			t.Errorf("%s: the copy was not offered to the clone: %v", c.name, logged)
+		}
 	}
 }

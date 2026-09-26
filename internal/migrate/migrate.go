@@ -147,6 +147,10 @@ type Options struct {
 	// chosen.
 	RedactOnly map[string]bool
 
+	// Copies are copies of the repositories on this computer, keyed by Gitea
+	// full name, whose objects a clone takes instead of downloading them.
+	Copies map[string]string
+
 	// LocalWork is work found in copies of the repositories on this computer
 	// that Gitea does not have, keyed by Gitea full name. What it can take is
 	// added to the mirror before anything is redacted or pushed.
@@ -320,13 +324,33 @@ func migrateOne(ctx context.Context, repo gitea.Repo, gh *github.Client, opts Op
 
 	// --- Mirror clone ------------------------------------------------------
 	mirrorPath := filepath.Join(workDir, strings.ReplaceAll(repo.FullName, "/", "_")+".git")
-	opts.Log("cloning %s", repo.FullName)
 	// Cloned from the address as it stands, with the credential supplied out
 	// of band: a token spliced into this URL would be copied into the mirror's
 	// own config by git, and left there if the run were interrupted.
-	if out, err := runGitAs(ctx, "", opts.GiteaUser, opts.GiteaToken,
-		"clone", "--mirror", repo.CloneURL, mirrorPath); err != nil {
-		return finish(StatusFailed, fmt.Sprintf("clone failed: %v: %s", err, out))
+	//
+	// With a copy on this computer, its objects are used and only what it
+	// lacks comes over the network -- usually nothing. Gitea still decides
+	// which branches and tags there are, so nothing a teammate pushed is
+	// missed; --dissociate copies what was borrowed, so the mirror does not
+	// depend on the copy afterwards.
+	clone := []string{"clone", "--mirror", repo.CloneURL, mirrorPath}
+	if local := opts.Copies[repo.FullName]; local != "" {
+		opts.Log("cloning %s, taking what it can from %s", repo.FullName, local)
+		withCopy := []string{"clone", "--mirror", "--reference-if-able", local, "--dissociate", repo.CloneURL, mirrorPath}
+		if _, err := runGitAs(ctx, "", opts.GiteaUser, opts.GiteaToken, withCopy...); err == nil {
+			clone = nil
+		} else {
+			// A copy git cannot borrow from -- a shallow one, say -- costs
+			// only the download it was meant to save.
+			_ = os.RemoveAll(mirrorPath)
+		}
+	} else {
+		opts.Log("cloning %s", repo.FullName)
+	}
+	if clone != nil {
+		if out, err := runGitAs(ctx, "", opts.GiteaUser, opts.GiteaToken, clone...); err != nil {
+			return finish(StatusFailed, fmt.Sprintf("clone failed: %v: %s", err, out))
+		}
 	}
 	// The mirror is scratch data; remove it as soon as the push is done so a
 	// thirty-repository run does not accumulate thirty working copies.
