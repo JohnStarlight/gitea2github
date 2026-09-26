@@ -18,6 +18,8 @@ package redact
 
 import (
 	"bufio"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -83,18 +85,49 @@ func FindAddresses(b []byte) []string {
 	return out
 }
 
-// Mapper decides what each address becomes, and remembers its decisions so the
-// same person maps to the same replacement everywhere.
+// Mapper decides what each address becomes within one repository, and
+// remembers its decisions so the same person maps to the same replacement
+// throughout that repository's history.
 type Mapper struct {
 	// mine are the addresses belonging to whoever is running the migration,
 	// and as is the one they all become.
 	mine map[string]bool
 	as   string
 
-	// Workers migrate repositories concurrently and each one filters its own
-	// stream, so the assignment table needs a lock.
+	// key is the secret the replacements are computed with. Without one, a
+	// replacement is a hash anybody can compute, and so anybody with a guess
+	// at an address -- a classmate's, say, from a list of logins -- can
+	// confirm it. Each repository gets its own, so the same person is not
+	// recognisable as the same person across repositories either.
+	key []byte
+
 	mu       sync.Mutex
 	assigned map[string]string
+
+	// seen counts distinct addresses across every Mapper made from one with
+	// ForRepository, for the run's summary.
+	seen *addressSet
+}
+
+type addressSet struct {
+	mu sync.Mutex
+	m  map[string]bool
+}
+
+func (s *addressSet) add(addr string) {
+	s.mu.Lock()
+	s.m[addr] = true
+	s.mu.Unlock()
+}
+
+// newKey returns a fresh random secret. It is never stored or shown: once a
+// repository is redacted, nothing needs it again.
+func newKey() []byte {
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		panic("redact: no randomness available: " + err.Error())
+	}
+	return key
 }
 
 // NewMapper builds a Mapper. Addresses in mine become as, and every other
@@ -120,17 +153,25 @@ func NewMapper(mine []string, as string) *Mapper {
 	// Trimmed but not lowercased: the lookup keys are folded so that an
 	// address matches however it was typed, but the replacement is written
 	// into every commit and a mangled login reads as a mistake.
-	return &Mapper{mine: k, as: strings.TrimSpace(as), assigned: map[string]string{}}
+	return &Mapper{mine: k, as: strings.TrimSpace(as), key: newKey(),
+		assigned: map[string]string{}, seen: &addressSet{m: map[string]bool{}}}
+}
+
+// ForRepository returns a Mapper for one repository: the same addresses kept
+// as yours, a secret of its own. A migration takes one per repository.
+func (m *Mapper) ForRepository() *Mapper {
+	return &Mapper{mine: m.mine, as: m.as, key: newKey(),
+		assigned: map[string]string{}, seen: m.seen}
 }
 
 // Redacted returns the replacement for one address.
 //
-// The replacement is a truncated SHA-256 of the address rather than a counter
-// or a scrubbed version of the original. That buys three things: the same
-// person gets the same replacement in every repository migrated, so history
-// stays coherent across a whole account; distinct people stay distinct, so
-// `git shortlog` still separates them; and nothing of the original address
-// survives, which a "first.last@..." style local part would not manage.
+// The replacement is a truncated HMAC-SHA256 of the address under this
+// repository's secret, rather than a counter or a scrubbed version of the
+// original. The same person gets the same replacement throughout the
+// repository, so `git shortlog` still separates contributors; nothing of the
+// original address survives; and, the secret being gone, nobody can test a
+// guess against it.
 func (m *Mapper) Redacted(addr string) string {
 	key := strings.ToLower(strings.TrimSpace(addr))
 	if key == "" {
@@ -148,17 +189,20 @@ func (m *Mapper) Redacted(addr string) string {
 	if existing, ok := m.assigned[key]; ok {
 		return existing
 	}
-	sum := sha256.Sum256([]byte(key))
-	replacement := hex.EncodeToString(sum[:5]) + "@" + Domain
+	mac := hmac.New(sha256.New, m.key)
+	mac.Write([]byte(key))
+	replacement := hex.EncodeToString(mac.Sum(nil)[:5]) + "@" + Domain
 	m.assigned[key] = replacement
+	m.seen.add(key)
 	return replacement
 }
 
-// Count reports how many distinct addresses were replaced, for the run summary.
+// Count reports how many distinct addresses were replaced across the run --
+// this Mapper and every one made from it -- for the run summary.
 func (m *Mapper) Count() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return len(m.assigned)
+	m.seen.mu.Lock()
+	defer m.seen.mu.Unlock()
+	return len(m.seen.m)
 }
 
 // rewriteIdentity rewrites one author/committer/tagger header, which git writes

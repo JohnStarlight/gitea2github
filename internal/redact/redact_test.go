@@ -2,26 +2,31 @@ package redact
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"strconv"
 	"strings"
 	"testing"
 )
 
-// TestRedactedIsStableAndDistinct covers the two properties the replacement
-// scheme promises: the same person always gets the same replacement, and two
-// different people never collide into one identity.
-func TestRedactedIsStableAndDistinct(t *testing.T) {
+// TestRedactedIsStableWithinARepositoryOnly covers what the replacement
+// scheme promises: within one repository the same person always gets the same
+// replacement, however the address was capitalised, and two people never
+// collide; across repositories the same person is not recognisable as the
+// same, since each is redacted under a secret of its own.
+func TestRedactedIsStableWithinARepositoryOnly(t *testing.T) {
 	a := NewMapper(nil, "")
-	b := NewMapper(nil, "")
+	b := a.ForRepository()
 
 	first := a.Redacted("alice@example.com")
-	if again := a.Redacted("alice@example.com"); again != first {
-		t.Errorf("same address mapped twice within one Mapper: %q then %q", first, again)
+	if again := a.Redacted("ALICE@example.com"); again != first {
+		t.Errorf("same address mapped twice within one repository: %q then %q", first, again)
 	}
-	// Stability across Mappers is what keeps a whole account's migrated
-	// repositories consistent with each other.
-	if other := b.Redacted("ALICE@example.com"); other != first {
-		t.Errorf("mapping is not stable across Mappers or not case-insensitive: %q vs %q", other, first)
+	if other := b.Redacted("alice@example.com"); other == first {
+		t.Errorf("the same person is recognisable across repositories: %q in both", first)
+	}
+	if a.Count() != 1 || b.Count() != 1 {
+		t.Errorf("Count = %d, %d; want one distinct address across the run", a.Count(), b.Count())
 	}
 	if bob := a.Redacted("bob@example.com"); bob == first {
 		t.Error("two different addresses collided into one replacement")
@@ -135,22 +140,33 @@ func TestFilterStreamRejectsDelimitedData(t *testing.T) {
 // TestTheAddressShapeIsAContract is the test that must be argued with before
 // the shape of a redacted address is changed.
 //
-// A repository on GitHub is the only record of how it was redacted. Recovering
-// that -- to rewrite a local clone to match, or to tell which addresses were
-// deliberately left alone -- means recognising a redacted address by looking at
-// it. Every repository redacted before a change to this shape becomes
-// unreadable by everything after it.
+// TestTheAddressShapeIsAContract: the value of a replacement is secret, its
+// shape is not. Recognising a redacted address by looking at it is how a
+// rewritten history is told from the original when commits cannot be
+// compared, so a change of shape would strand every repository redacted
+// before it.
 func TestTheAddressShapeIsAContract(t *testing.T) {
 	got := NewMapper(nil, "").Redacted("student@zone01.gr")
-
-	if want := "e9e3c54b5e@redacted.invalid"; got != want {
-		t.Errorf("the redacted form of a known address is %q, want %q.\n"+
-			"If this was deliberate: every repository redacted with the old shape "+
-			"can no longer be recognised, and a local rewrite of one will not "+
-			"reproduce its commits.", got, want)
-	}
 	if !IsRedacted(got) {
 		t.Errorf("%q is not recognised as redacted by this package's own pattern", got)
+	}
+	if !AddressPattern.MatchString(got) || len(got) != len("e9e3c54b5e@redacted.invalid") {
+		t.Errorf("%q does not have the shape: ten hexadecimal characters at %s", got, Domain)
+	}
+}
+
+// TestAGuessCannotBeConfirmed is the reason for the secret. A replacement
+// computed from the address alone -- as it once was -- lets anybody with a
+// list of likely addresses find out whose commits these are: at a school
+// every login is public, and every Gitea no-reply address follows from one.
+func TestAGuessCannotBeConfirmed(t *testing.T) {
+	addr := "student@zone01.gr"
+	sum := sha256.Sum256([]byte(addr))
+	guess := hex.EncodeToString(sum[:5]) + "@" + Domain
+	for i := 0; i < 20; i++ {
+		if got := NewMapper(nil, "").Redacted(addr); got == guess {
+			t.Fatalf("the replacement for %s can be computed from the address alone: %s", addr, got)
+		}
 	}
 }
 

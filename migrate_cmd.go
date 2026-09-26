@@ -238,8 +238,9 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		}
 	}
 
-	// A single Mapper is shared by every worker so that one person is redacted
-	// to the same replacement address across all of the migrated repositories.
+	// One Mapper carries what every repository's redaction shares: the
+	// addresses kept as yours, and the count for the summary. Each repository
+	// is redacted under a secret of its own; see redact.Mapper.
 	var mapper *redact.Mapper
 	if *redactEmails {
 		mapper = redact.NewMapper(keepEmails, me.NoReply)

@@ -379,9 +379,18 @@ Every address becomes a stand-in such as `4f2a91c0de@redacted.invalid`, in both
 places addresses hide: the author and committer headers, and the commit message
 body, where `Co-authored-by:` trailers are just as public.
 
-The replacement is a hash of the original, so one person maps to the same
-stand-in in every repository you migrate — `git shortlog` still separates
-contributors — while nothing of the original survives.
+Within a repository, one person keeps one stand-in, so `git shortlog` still
+separates contributors. Nothing of the original survives, and it cannot be
+worked back out: each stand-in is computed under a random secret that exists
+only while that repository is being rewritten. Without one, anybody with a
+list of likely addresses could test them — and at a school, where every login
+is public and every Gitea no-reply address follows from one, that list is easy
+to make. Each repository gets its own secret, so a classmate is not
+recognisable as the same person across your repositories either.
+
+Repositories redacted by versions of this tool before the secret was added
+used a plain hash, which can be tested that way. To protect one, delete it on
+GitHub and migrate it again.
 
 **`--keep-email` names an address of yours**, and rewrites it to your GitHub
 no-reply — `<id>+<login>@users.noreply.github.com`, worked out from the account

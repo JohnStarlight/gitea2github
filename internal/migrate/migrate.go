@@ -130,8 +130,10 @@ type Options struct {
 	// rather than as a separate boolean makes an inconsistent combination
 	// impossible to construct.
 	//
-	// One Mapper is shared by every worker so that a person who appears in
-	// several repositories is redacted to the same address in all of them.
+	// Each repository is redacted with its own Mapper.ForRepository, so the
+	// same person is not recognisable as the same across repositories; this
+	// one carries what they share -- the addresses kept as yours, and the
+	// count for the summary.
 	Mapper *redact.Mapper
 
 	// RedactOnly narrows redaction to individual repositories, keyed by Gitea
@@ -369,7 +371,7 @@ func migrateOne(ctx context.Context, repo gitea.Repo, gh *github.Client, opts Op
 	if opts.Redacts(repo.FullName) {
 		opts.Log("redacting email addresses in %s", repo.FullName)
 		rewritten := mirrorPath + ".redacted"
-		if err := rewriteHistory(ctx, mirrorPath, rewritten, opts.Mapper); err != nil {
+		if err := rewriteHistory(ctx, mirrorPath, rewritten, opts.Mapper.ForRepository()); err != nil {
 			return finish(StatusFailed, fmt.Sprintf("redacting emails: %v", err))
 		}
 		defer os.RemoveAll(rewritten)
